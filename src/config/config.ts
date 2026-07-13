@@ -1,0 +1,121 @@
+/**
+ * Reads and validates the environment into a typed, fully-resolved config
+ * object. Nothing else in the codebase should read `process.env` directly
+ * -- this is the one place that happens, so every required value is
+ * checked in one pass and failures are reported together, not one at a
+ * time as the app happens to reach each usage.
+ */
+export interface AppConfig {
+  telegramBotToken: string;
+  /** Telegram's optional "X-Telegram-Bot-Api-Secret-Token" webhook header, if configured. Null means no check is performed -- see `securityWarnings()` below. */
+  telegramWebhookSecretToken: string | null;
+  managerNotificationChatId: string;
+  /** Gemini API key -- see src/llm/gemini/GeminiProvider.ts. This is the only LLM provider wired up today; swapping providers means adding a new class behind src/llm/LlmProvider.ts and changing composition.ts, not changing this config shape. */
+  geminiApiKey: string;
+  geminiModel: string;
+  knowledgeBaseDir: string;
+  promptsDir: string;
+  databasePath: string;
+  port: number;
+}
+
+/**
+ * Non-blocking security concerns worth surfacing loudly at startup, even
+ * though they don't stop the app from running. Kept separate from
+ * ConfigValidationError deliberately -- these are real risks, but not
+ * "this literally cannot start" conditions, and conflating the two would
+ * either make a genuinely optional setting mandatory or bury a real
+ * warning inside noise the operator has to parse out.
+ */
+export function securityWarnings(config: AppConfig): string[] {
+  const warnings: string[] = [];
+
+  if (!config.telegramWebhookSecretToken) {
+    warnings.push(
+      "TELEGRAM_WEBHOOK_SECRET_TOKEN is not set. Without it, anyone who discovers your webhook URL " +
+        "can send fake Telegram updates to this server. Set it to a random string and configure the same " +
+        "value when registering the webhook with Telegram (see src/scripts/registerWebhook.ts)."
+    );
+  }
+
+  return warnings;
+}
+
+export class ConfigValidationError extends Error {
+  constructor(public readonly problems: string[]) {
+    super(
+      `Configuration is invalid -- the application will not start until every item below is fixed.\n` +
+        problems.map((problem) => `  - ${problem}`).join("\n") +
+        `\n\nHow to fix: set the missing/invalid variable(s) in your .env file (see .env.example for the ` +
+        `full list and format), then restart. If you're running via a process manager or container, make ` +
+        `sure it's actually passing these variables through to the process.`
+    );
+    this.name = "ConfigValidationError";
+  }
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const problems: string[] = [];
+
+  const telegramBotToken = requireNonEmptyString(
+    env,
+    "TELEGRAM_BOT_TOKEN",
+    "needed to authenticate with Telegram's Bot API -- get one from @BotFather on Telegram",
+    problems
+  );
+  const managerNotificationChatId = requireNonEmptyString(
+    env,
+    "MANAGER_NOTIFICATION_CHAT_ID",
+    "needed so escalations have somewhere to be delivered -- the Telegram chat/group ID that should receive them",
+    problems
+  );
+  const geminiApiKey = requireNonEmptyString(
+    env,
+    "GEMINI_API_KEY",
+    "needed to generate real assistant replies -- get one from Google AI Studio",
+    problems
+  );
+  const port = parsePort(env.PORT, problems);
+
+  if (problems.length > 0) {
+    throw new ConfigValidationError(problems);
+  }
+
+  return {
+    telegramBotToken: telegramBotToken!,
+    telegramWebhookSecretToken: env.TELEGRAM_WEBHOOK_SECRET_TOKEN?.trim() || null,
+    managerNotificationChatId: managerNotificationChatId!,
+    geminiApiKey: geminiApiKey!,
+    geminiModel: env.GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+    knowledgeBaseDir: env.KNOWLEDGE_BASE_DIR?.trim() || "./knowledge",
+    promptsDir: env.PROMPTS_DIR?.trim() || "./prompts",
+    databasePath: env.DATABASE_PATH?.trim() || "./data/nuteco.db",
+    port: port!,
+  };
+}
+
+function requireNonEmptyString(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  why: string,
+  problems: string[]
+): string | undefined {
+  const value = env[name]?.trim();
+  if (!value) {
+    problems.push(`${name} is required but not set (${why}).`);
+    return undefined;
+  }
+  return value;
+}
+
+function parsePort(rawValue: string | undefined, problems: string[]): number | undefined {
+  if (!rawValue || !rawValue.trim()) {
+    return 3000; // a sensible default, not a required setting
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    problems.push(`PORT must be a whole number between 1 and 65535, got "${rawValue}".`);
+    return undefined;
+  }
+  return parsed;
+}
