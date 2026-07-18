@@ -43,6 +43,58 @@ test("applies sensible defaults for optional settings", () => {
   assert.equal(config.promptsDir, "./prompts");
   assert.equal(config.databasePath, "./data/nuteco.db");
   assert.equal(config.port, 3000);
+  assert.equal(config.instagram, null, "Instagram is disabled by default -- a Telegram-only deployment needs no changes");
+});
+
+test("Instagram support stays disabled when none of the INSTAGRAM_* variables are set", () => {
+  const config = loadConfig(baseEnv());
+  assert.equal(config.instagram, null);
+});
+
+test("loads a complete Instagram config when every INSTAGRAM_* variable is set", () => {
+  const config = loadConfig(
+    baseEnv({
+      INSTAGRAM_PAGE_ACCESS_TOKEN: "ig-page-token",
+      INSTAGRAM_APP_SECRET: "ig-app-secret",
+      INSTAGRAM_VERIFY_TOKEN: "ig-verify-token",
+      INSTAGRAM_PAGE_ID: "17841400000000000",
+    })
+  );
+
+  assert.deepEqual(config.instagram, {
+    pageAccessToken: "ig-page-token",
+    appSecret: "ig-app-secret",
+    verifyToken: "ig-verify-token",
+    pageId: "17841400000000000",
+    graphApiVersion: "v21.0",
+  });
+});
+
+test("an explicit INSTAGRAM_GRAPH_API_VERSION overrides the default", () => {
+  const config = loadConfig(
+    baseEnv({
+      INSTAGRAM_PAGE_ACCESS_TOKEN: "ig-page-token",
+      INSTAGRAM_APP_SECRET: "ig-app-secret",
+      INSTAGRAM_VERIFY_TOKEN: "ig-verify-token",
+      INSTAGRAM_PAGE_ID: "17841400000000000",
+      INSTAGRAM_GRAPH_API_VERSION: "v22.0",
+    })
+  );
+
+  assert.equal(config.instagram?.graphApiVersion, "v22.0");
+});
+
+test("a partially-configured Instagram setup fails loudly, listing every missing INSTAGRAM_* variable", () => {
+  try {
+    loadConfig(baseEnv({ INSTAGRAM_PAGE_ACCESS_TOKEN: "ig-page-token" }));
+    assert.fail("expected loadConfig to throw");
+  } catch (error) {
+    assert.ok(error instanceof ConfigValidationError);
+    assert.ok(error.problems.some((p) => p.includes("INSTAGRAM_APP_SECRET")));
+    assert.ok(error.problems.some((p) => p.includes("INSTAGRAM_VERIFY_TOKEN")));
+    assert.ok(error.problems.some((p) => p.includes("INSTAGRAM_PAGE_ID")));
+    assert.ok(!error.problems.some((p) => p.includes("INSTAGRAM_PAGE_ACCESS_TOKEN")), "the one variable that IS set should not be reported as missing");
+  }
 });
 
 test("collects every missing required variable in one error, not just the first", () => {

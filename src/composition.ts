@@ -9,7 +9,13 @@ import { HttpTelegramTransport } from "./adapters/telegram/HttpTelegramTransport
 import { TelegramMessageSender } from "./adapters/telegram/TelegramMessageSender";
 import { parseUpdate } from "./adapters/telegram/parseUpdate";
 import type { TelegramTransport } from "./adapters/telegram/TelegramTransport";
+import { HttpInstagramTransport } from "./adapters/instagram/HttpInstagramTransport";
+import { InstagramMessageSender } from "./adapters/instagram/InstagramMessageSender";
+import { parseInstagramWebhookEvent } from "./adapters/instagram/parseWebhookEvent";
+import type { InstagramTransport } from "./adapters/instagram/InstagramTransport";
+import { PlatformRoutingMessageSender } from "./adapters/PlatformRoutingMessageSender";
 import type { MessageSender } from "./adapters/MessageSender";
+import type { ParsedUpdateResult } from "./adapters/ParsedUpdateResult";
 import { MessageDebouncer, type InboundMessage } from "./engine/MessageDebouncer";
 import { createConversationEngine } from "./engine/ConversationEngine";
 import { GeminiProvider } from "./llm/gemini/GeminiProvider";
@@ -29,6 +35,8 @@ import { createLogger, type Logger } from "./observability/logger";
 export interface AppDependencies {
   config: AppConfig;
   transport: TelegramTransport;
+  /** Present only when INSTAGRAM_* config is set -- see config.ts and src/index.ts. */
+  instagramTransport: InstagramTransport | null;
   messageSender: MessageSender;
   identityRepository: CustomerIdentityRepository;
   conversationStateRepository: ConversationStateRepository;
@@ -46,7 +54,23 @@ export interface AppDependencies {
 export function buildDependencies(config: AppConfig, logger: Logger = createLogger()): AppDependencies {
   const db = openDatabase(config.databasePath);
   const transport = new HttpTelegramTransport({ botToken: config.telegramBotToken, logger });
-  const messageSender = new TelegramMessageSender({ transport });
+
+  const sendersByPlatform: Record<string, MessageSender> = {
+    telegram: new TelegramMessageSender({ transport }),
+  };
+
+  let instagramTransport: InstagramTransport | null = null;
+  if (config.instagram) {
+    instagramTransport = new HttpInstagramTransport({
+      pageAccessToken: config.instagram.pageAccessToken,
+      pageId: config.instagram.pageId,
+      graphApiVersion: config.instagram.graphApiVersion,
+      logger,
+    });
+    sendersByPlatform.instagram = new InstagramMessageSender({ transport: instagramTransport });
+  }
+
+  const messageSender = new PlatformRoutingMessageSender(sendersByPlatform);
   const identityRepository = new SqliteCustomerIdentityRepository(db);
   const conversationStateRepository = new SqliteConversationStateRepository(db);
   const debouncer = new MessageDebouncer();
@@ -65,12 +89,16 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     // here, the one place this project's concrete platform choices are
     // made -- ConversationEngine itself treats this the same opaque way
     // it treats every customerId, never assuming or inspecting the format.
+    // Manager notifications always go to Telegram regardless of which
+    // platform a customer messaged in on -- there is only ever one
+    // manager notification chat configured, and it's a Telegram chat ID.
     managerNotificationRecipientId: `telegram:${config.managerNotificationChatId}`,
   });
 
   return {
     config,
     transport,
+    instagramTransport,
     messageSender,
     identityRepository,
     conversationStateRepository,
@@ -84,10 +112,14 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
 }
 
 /**
- * Parses a raw Telegram update, runs it through the debouncer, and hands
- * any ready batch to the message handler -- draining further batches (per
- * MessageDebouncer's protocol) until the customer is idle again. This is
- * the function the webhook handler's `onUpdate` callback points at.
+ * The platform-agnostic core shared by every adapter's webhook
+ * entrypoint: runs one already-parsed update through the debouncer and
+ * hands any ready batch to the message handler -- draining further
+ * batches (per MessageDebouncer's protocol) until the customer is idle
+ * again. handleIncomingTelegramUpdate and handleIncomingInstagramUpdate
+ * below are thin, parser-specific wrappers around this -- the actual
+ * debounce/dispatch/error-recovery logic exists exactly once, so adding a
+ * platform never means duplicating it.
  *
  * Logging note: `conversation.started` / `conversation.ended` map onto the
  * real signals available today -- "a batch of messages is about to be
@@ -98,15 +130,13 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
  * they map to is documented here so nobody mistakes this for more than
  * it is.
  */
-export async function handleIncomingTelegramUpdate(
-  rawUpdate: unknown,
+async function handleParsedUpdate(
+  parsed: ParsedUpdateResult,
   deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
 ): Promise<void> {
-  const parsed = parseUpdate(rawUpdate);
-
   if (parsed.kind === "unsupported") {
     deps.logger.info("webhook.update_unsupported", { updateType: parsed.updateType });
-    return; // a real Telegram update type this project doesn't act on yet -- not an error
+    return; // a real update/event shape this project doesn't act on yet -- not an error
   }
 
   const admitResult = deps.debouncer.admit(parsed.message);
@@ -128,6 +158,34 @@ export async function handleIncomingTelegramUpdate(
   }
 
   await drainBatches(parsed.message.customerId, admitResult.batch, deps);
+}
+
+/** Parses a raw Telegram update and runs it through the shared platform-agnostic core above. This is the function the Telegram webhook handler's `onUpdate` callback points at. */
+export async function handleIncomingTelegramUpdate(
+  rawUpdate: unknown,
+  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+): Promise<void> {
+  await handleParsedUpdate(parseUpdate(rawUpdate), deps);
+}
+
+/**
+ * Parses a raw Instagram webhook POST body and runs each event it
+ * contains through the shared platform-agnostic core above. This is the
+ * function the Instagram webhook handler's `onEvent` callback points at.
+ *
+ * Unlike Telegram (exactly one update per webhook delivery), a single
+ * Instagram webhook POST can batch multiple messaging events -- see
+ * parseWebhookEvent.ts's doc comment. Each is processed sequentially, not
+ * in parallel, so behavior stays as deterministic and easy to reason
+ * about as the Telegram path.
+ */
+export async function handleIncomingInstagramUpdate(
+  rawEvent: unknown,
+  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+): Promise<void> {
+  for (const parsed of parseInstagramWebhookEvent(rawEvent)) {
+    await handleParsedUpdate(parsed, deps);
+  }
 }
 
 /**

@@ -5,6 +5,14 @@
  * checked in one pass and failures are reported together, not one at a
  * time as the app happens to reach each usage.
  */
+export interface InstagramConfig {
+  pageAccessToken: string;
+  appSecret: string;
+  verifyToken: string;
+  pageId: string;
+  graphApiVersion: string;
+}
+
 export interface AppConfig {
   telegramBotToken: string;
   /** Telegram's optional "X-Telegram-Bot-Api-Secret-Token" webhook header, if configured. Null means no check is performed -- see `securityWarnings()` below. */
@@ -17,6 +25,13 @@ export interface AppConfig {
   promptsDir: string;
   databasePath: string;
   port: number;
+  /**
+   * Present only when every INSTAGRAM_* variable is set -- null means
+   * Instagram support is simply disabled, so an existing Telegram-only
+   * deployment needs zero config changes. See parseInstagramConfig below
+   * for the all-or-nothing validation rule.
+   */
+  instagram: InstagramConfig | null;
 }
 
 /**
@@ -76,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems
   );
   const port = parsePort(env.PORT, problems);
+  const instagram = parseInstagramConfig(env, problems);
 
   if (problems.length > 0) {
     throw new ConfigValidationError(problems);
@@ -91,6 +107,49 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     promptsDir: env.PROMPTS_DIR?.trim() || "./prompts",
     databasePath: env.DATABASE_PATH?.trim() || "./data/nuteco.db",
     port: port!,
+    instagram,
+  };
+}
+
+/**
+ * Instagram support is entirely optional -- an existing Telegram-only
+ * deployment works unchanged with none of these set. But it's all-or-
+ * nothing once any one of them is: a partially-configured Instagram setup
+ * (most likely a typo'd variable name) is far more likely to be a mistake
+ * than an intentional partial setup, so it fails loudly at startup
+ * instead of silently running with Instagram half-disabled.
+ */
+function parseInstagramConfig(env: NodeJS.ProcessEnv, problems: string[]): InstagramConfig | null {
+  const rawValues = {
+    INSTAGRAM_PAGE_ACCESS_TOKEN: env.INSTAGRAM_PAGE_ACCESS_TOKEN?.trim(),
+    INSTAGRAM_APP_SECRET: env.INSTAGRAM_APP_SECRET?.trim(),
+    INSTAGRAM_VERIFY_TOKEN: env.INSTAGRAM_VERIFY_TOKEN?.trim(),
+    INSTAGRAM_PAGE_ID: env.INSTAGRAM_PAGE_ID?.trim(),
+  };
+
+  const anySet = Object.values(rawValues).some((value) => !!value);
+  if (!anySet) {
+    return null;
+  }
+
+  const missing = Object.entries(rawValues).filter(([, value]) => !value);
+  for (const [name] of missing) {
+    problems.push(
+      `${name} is required once any INSTAGRAM_* variable is set (Instagram support is all-or-nothing -- set ` +
+        `every INSTAGRAM_* variable, or none of them to leave it disabled).`
+    );
+  }
+
+  if (missing.length > 0) {
+    return null;
+  }
+
+  return {
+    pageAccessToken: rawValues.INSTAGRAM_PAGE_ACCESS_TOKEN!,
+    appSecret: rawValues.INSTAGRAM_APP_SECRET!,
+    verifyToken: rawValues.INSTAGRAM_VERIFY_TOKEN!,
+    pageId: rawValues.INSTAGRAM_PAGE_ID!,
+    graphApiVersion: env.INSTAGRAM_GRAPH_API_VERSION?.trim() || "v21.0",
   };
 }
 

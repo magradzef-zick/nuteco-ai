@@ -1,4 +1,5 @@
 import type { InboundMessage } from "../../engine/MessageDebouncer";
+import type { ParsedUpdateResult } from "../ParsedUpdateResult";
 
 /**
  * The subset of Telegram's real wire format this project actually reads.
@@ -50,10 +51,6 @@ export interface NormalizedTelegramMessage {
   /** Unix seconds, from Telegram's `date` (or `edit_date` for an edited message). */
   timestamp: number;
 }
-
-export type ParsedUpdateResult =
-  | { kind: "message"; message: InboundMessage }
-  | { kind: "unsupported"; updateType: string };
 
 /** Known Telegram update fields this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap. */
 const KNOWN_UNSUPPORTED_UPDATE_TYPES = [
