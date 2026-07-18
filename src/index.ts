@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { loadConfig, securityWarnings, ConfigValidationError } from "./config/config";
-import { buildDependencies, handleIncomingTelegramUpdate } from "./composition";
+import { buildDependencies, handleIncomingTelegramUpdate, handleIncomingInstagramUpdate } from "./composition";
 import { createTelegramWebhookHandler } from "./adapters/telegram/webhookRouter";
+import { createInstagramWebhookHandler } from "./adapters/instagram/webhookRouter";
 import { loadKnowledgeBase } from "./knowledge/loader";
 import { loadSystemPrompt } from "./prompts/loader";
 import {
@@ -10,13 +11,16 @@ import {
   systemPromptCheck,
   databaseCheck,
   telegramTokenCheck,
+  instagramTokenCheck,
   llmProviderCheck,
   StartupValidationError,
+  type StartupCheck,
 } from "./startup/validateStartup";
 import { createShutdownHandler } from "./lifecycle/shutdown";
 import { createLogger } from "./observability/logger";
 
-const WEBHOOK_PATH = "/telegram/webhook";
+const TELEGRAM_WEBHOOK_PATH = "/telegram/webhook";
+const INSTAGRAM_WEBHOOK_PATH = "/instagram/webhook";
 
 /**
  * The real process entrypoint. This is the one file in the whole project
@@ -45,17 +49,19 @@ async function main(): Promise<void> {
 
   const deps = buildDependencies(config, logger);
 
+  const startupChecks: StartupCheck[] = [
+    knowledgeBaseCheck(() => loadKnowledgeBase({ knowledgeDir: config.knowledgeBaseDir })),
+    systemPromptCheck(() => loadSystemPrompt(config.promptsDir)),
+    databaseCheck(deps.db),
+    telegramTokenCheck(deps.transport),
+    llmProviderCheck(deps.llmProvider),
+  ];
+  if (deps.instagramTransport) {
+    startupChecks.push(instagramTokenCheck(deps.instagramTransport));
+  }
+
   try {
-    await runStartupChecks(
-      [
-        knowledgeBaseCheck(() => loadKnowledgeBase({ knowledgeDir: config.knowledgeBaseDir })),
-        systemPromptCheck(() => loadSystemPrompt(config.promptsDir)),
-        databaseCheck(deps.db),
-        telegramTokenCheck(deps.transport),
-        llmProviderCheck(deps.llmProvider),
-      ],
-      logger
-    );
+    await runStartupChecks(startupChecks, logger);
   } catch (error) {
     // Individual failures were already logged (startup.check_failed) inside
     // runStartupChecks -- this is the single "startup did not succeed"
@@ -65,17 +71,37 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const webhookHandler = createTelegramWebhookHandler({
+  const telegramWebhookHandler = createTelegramWebhookHandler({
     secretToken: config.telegramWebhookSecretToken,
     onUpdate: (update) => handleIncomingTelegramUpdate(update, deps),
     logger,
   });
 
+  // Present only when INSTAGRAM_* config is set (see config.ts) -- an
+  // existing Telegram-only deployment gets exactly the same server as
+  // before, with no second route ever registered.
+  const instagramWebhookHandler = config.instagram
+    ? createInstagramWebhookHandler({
+        verifyToken: config.instagram.verifyToken,
+        appSecret: config.instagram.appSecret,
+        onEvent: (event) => handleIncomingInstagramUpdate(event, deps),
+        logger,
+      })
+    : null;
+
   const server = createServer((req, res) => {
-    if (req.url === WEBHOOK_PATH) {
-      webhookHandler(req, res);
+    const pathname = new URL(req.url ?? "", "http://localhost").pathname;
+
+    if (pathname === TELEGRAM_WEBHOOK_PATH) {
+      telegramWebhookHandler(req, res);
       return;
     }
+
+    if (instagramWebhookHandler && pathname === INSTAGRAM_WEBHOOK_PATH) {
+      instagramWebhookHandler(req, res);
+      return;
+    }
+
     res.writeHead(404).end();
   });
 
@@ -90,7 +116,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   server.listen(config.port, () => {
-    logger.info("startup.success", { port: config.port });
+    logger.info("startup.success", { port: config.port, instagramEnabled: config.instagram !== null });
   });
 }
 
