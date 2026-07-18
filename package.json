@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file=.env --import tsx src/index.ts",
     "register-webhook": "node --env-file=.env --import tsx src/scripts/registerWebhook.ts",
-    "test": "node --import tsx --test tests/knowledge-loader.test.ts tests/hallucination-guardrail.test.ts tests/customer-identity-repository.test.ts tests/conversation-state-repository.test.ts tests/message-debouncer.test.ts tests/config.test.ts tests/telegram-parse-update.test.ts tests/retry.test.ts tests/telegram-http-transport.test.ts tests/telegram-message-sender.test.ts tests/startup-validation.test.ts tests/telegram-webhook-integration.test.ts tests/logger.test.ts tests/shutdown.test.ts tests/sqlite-connection.test.ts tests/gemini-provider.test.ts tests/conversation-engine.test.ts tests/b2b-detector.test.ts tests/composition.test.ts tests/language-detector.test.ts"
+    "subscribe-instagram-webhook": "node --env-file=.env --import tsx src/scripts/subscribeInstagramWebhook.ts",
+    "test": "node --import tsx --test tests/knowledge-loader.test.ts tests/hallucination-guardrail.test.ts tests/customer-identity-repository.test.ts tests/conversation-state-repository.test.ts tests/message-debouncer.test.ts tests/config.test.ts tests/telegram-parse-update.test.ts tests/retry.test.ts tests/telegram-http-transport.test.ts tests/telegram-message-sender.test.ts tests/startup-validation.test.ts tests/telegram-webhook-integration.test.ts tests/logger.test.ts tests/shutdown.test.ts tests/sqlite-connection.test.ts tests/gemini-provider.test.ts tests/conversation-engine.test.ts tests/b2b-detector.test.ts tests/composition.test.ts tests/language-detector.test.ts tests/instagram-parse-webhook-event.test.ts tests/instagram-http-transport.test.ts tests/instagram-message-sender.test.ts tests/platform-routing-message-sender.test.ts tests/instagram-webhook-integration.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0"

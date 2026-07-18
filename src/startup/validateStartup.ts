@@ -1,5 +1,6 @@
 import type { Database } from "better-sqlite3";
 import type { TelegramTransport } from "../adapters/telegram/TelegramTransport";
+import type { InstagramTransport } from "../adapters/instagram/InstagramTransport";
 import type { LlmProvider } from "../llm/LlmProvider";
 import { createLogger, type Logger } from "../observability/logger";
 
@@ -134,6 +135,29 @@ export function telegramTokenCheck(transport: TelegramTransport): StartupCheck {
         throw new Error(
           "Telegram rejected this bot token. Check TELEGRAM_BOT_TOKEN in your .env file was copied " +
             "correctly from @BotFather, and that the bot hasn't been deleted or had its token regenerated.",
+          { cause }
+        );
+      }
+    },
+  };
+}
+
+/**
+ * Confirms the Instagram page access token is genuinely valid by asking
+ * the Graph API who the connected account is -- same reasoning as
+ * telegramTokenCheck. Only added to the startup check list when Instagram
+ * is configured -- see src/index.ts.
+ */
+export function instagramTokenCheck(transport: InstagramTransport): StartupCheck {
+  return {
+    name: "Instagram page access token is valid",
+    run: async () => {
+      try {
+        await transport.getProfile();
+      } catch (cause) {
+        throw new Error(
+          "The Instagram Graph API rejected this page access token. Check INSTAGRAM_PAGE_ACCESS_TOKEN in your " +
+            ".env file is valid and hasn't expired, and that INSTAGRAM_PAGE_ID matches the same account.",
           { cause }
         );
       }
