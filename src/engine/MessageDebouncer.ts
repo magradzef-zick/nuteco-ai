@@ -49,6 +49,22 @@ export type AdmitResult =
   | { action: "queued" }
   | { action: "process"; batch: InboundMessage[] };
 
+/**
+ * Durable "has this message ID already been fully processed" memory,
+ * surviving process restarts -- unlike `recentlyProcessed` below, which is
+ * deliberately in-memory-only for the fast, common case (coalescing
+ * messages that arrive seconds apart within a single run). Optional: when
+ * not provided, MessageDebouncer behaves exactly as it always has
+ * (in-memory dedup only, reset on restart). See
+ * SqliteProcessedMessageStore for the real implementation -- message IDs
+ * from both platform adapters are already globally unique (they embed the
+ * customer/chat ID), so a single unscoped table is safe.
+ */
+export interface ProcessedMessageStore {
+  has(messageId: string): boolean;
+  record(messageId: string): void;
+}
+
 interface CustomerQueue {
   inFlight: boolean;
   /** Message IDs in the batch currently handed to the caller, not yet complete()'d. */
@@ -63,11 +79,16 @@ const DEFAULT_MAX_RECENTLY_PROCESSED_PER_CUSTOMER = 200;
 
 export class MessageDebouncer {
   private readonly maxRecentlyProcessed: number;
+  private readonly persistedStore: ProcessedMessageStore | undefined;
   private readonly customers = new Map<string, CustomerQueue>();
 
-  constructor(options?: { maxRecentlyProcessedPerCustomer?: number }) {
+  constructor(options?: {
+    maxRecentlyProcessedPerCustomer?: number;
+    persistedStore?: ProcessedMessageStore;
+  }) {
     this.maxRecentlyProcessed =
       options?.maxRecentlyProcessedPerCustomer ?? DEFAULT_MAX_RECENTLY_PROCESSED_PER_CUSTOMER;
+    this.persistedStore = options?.persistedStore;
   }
 
   admit(message: InboundMessage): AdmitResult {
@@ -75,7 +96,8 @@ export class MessageDebouncer {
 
     const isDuplicate =
       queue.recentlyProcessed.includes(message.messageId) ||
-      queue.inFlightMessageIds.has(message.messageId);
+      queue.inFlightMessageIds.has(message.messageId) ||
+      (this.persistedStore?.has(message.messageId) ?? false);
 
     if (isDuplicate) {
       return { action: "duplicate" };
@@ -110,6 +132,9 @@ export class MessageDebouncer {
     queue.recentlyProcessed.push(...processedMessageIds);
     if (queue.recentlyProcessed.length > this.maxRecentlyProcessed) {
       queue.recentlyProcessed.splice(0, queue.recentlyProcessed.length - this.maxRecentlyProcessed);
+    }
+    for (const messageId of processedMessageIds) {
+      this.persistedStore?.record(messageId);
     }
     queue.inFlightMessageIds.clear();
 

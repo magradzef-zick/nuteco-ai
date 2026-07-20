@@ -54,7 +54,7 @@ The knowledge base is injected into every call in full ("full-context stuffing")
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in the values below.
+Copy `.env.example` to `.env` and fill in the values below. [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) has the fuller reference, including Docker-specific notes on how these get into the container.
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
@@ -67,6 +67,7 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `PROMPTS_DIR` | No | `./prompts` | Directory containing the system prompt template. |
 | `DATABASE_PATH` | No | `./data/nuteco.db` | SQLite file location. Parent directory is created automatically if missing. |
 | `PORT` | No | `3000` | Port the webhook HTTP server listens on. |
+| `TOKEN_HEALTH_CHECK_INTERVAL_MS` | No | `3600000` | How often the startup token/health checks (Telegram, Instagram, Gemini) re-run for as long as the process keeps running, so an expired/revoked credential is caught and logged proactively. `0` disables the periodic re-check. |
 | `INSTAGRAM_PAGE_ACCESS_TOKEN` | No* | — | Page access token for the Instagram-linked Facebook Page (Meta App Dashboard, Messenger/Instagram product). |
 | `INSTAGRAM_APP_SECRET` | No* | — | Your Meta app's App Secret. Verifies the `X-Hub-Signature-256` header on every webhook delivery — the Instagram equivalent of `TELEGRAM_WEBHOOK_SECRET_TOKEN`. |
 | `INSTAGRAM_VERIFY_TOKEN` | No* | — | A random string you choose, entered into the Meta App Dashboard's webhook subscription form; echoed back on the one-time GET verification request. |
@@ -97,11 +98,18 @@ npm run build      # type-check with tsc, no emitted output needed for developme
 
 ## Deployment
 
-The process is a single long-lived Node server; it speaks plain HTTP and expects TLS to be terminated in front of it (a reverse proxy or load balancer). It needs:
+Full detail (including a reference nginx config, healthcheck behavior, and volume/persistence notes) lives in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — this section is the short version.
 
-- A publicly reachable HTTPS URL pointing at the deployed process.
-- A process supervisor (systemd, a container orchestrator, pm2, etc.) so the process restarts if it crashes.
-- All required environment variables set in the deployment environment (see above) — the app validates them at startup and refuses to run with anything missing or invalid.
+**Docker (recommended):**
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The container speaks plain HTTP on port 3000 — TLS termination still needs a reverse proxy or load balancer in front of it, same as the non-Docker path. `.env` is injected at container start (`env_file` in `docker-compose.yml`), never baked into the image. `GET /health` is a cheap liveness route (confirms the server is accepting connections, not that every downstream dependency is currently reachable) — the Dockerfile's `HEALTHCHECK` already uses it.
+
+**Without Docker:** the process is a single long-lived Node server under a supervisor (systemd, pm2, etc.) — same environment variable requirements, same startup validation, same webhook registration steps below; just run `npm start` directly instead of the Docker commands above.
 
 After deploying, register the Telegram webhook once so Telegram knows where to send updates:
 
@@ -111,7 +119,7 @@ npm run register-webhook -- https://your-domain.example/telegram/webhook
 
 Re-run this if the domain changes or the webhook secret is rotated.
 
-If Instagram is configured, two more one-time steps are needed (in this order):
+If Instagram is configured, two more one-time steps are needed (in this order). The full token-acquisition flow — including two non-obvious steps this project's own setup got wrong before it worked — is documented in [`docs/META_SETUP.md`](docs/META_SETUP.md):
 
 1. In the Meta App Dashboard's Webhooks product, set the callback URL to `https://your-domain.example/instagram/webhook` and the verify token to the same value as `INSTAGRAM_VERIFY_TOKEN`. Meta calls the URL with a GET request at this point; the app must already be running to answer it.
 2. Subscribe the page to the `messages` field:
@@ -121,6 +129,8 @@ If Instagram is configured, two more one-time steps are needed (in this order):
    ```
 
    Unlike Telegram's `setWebhook`, this does not register the URL itself — that's the Dashboard step above. It only tells Meta which fields to actually deliver for this page.
+
+Hit an error partway through any of this? [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) documents the actual errors this project's own deployment ran into, with their real cause — several look like a broken token or bad config but aren't.
 
 ## Project structure
 
@@ -141,8 +151,10 @@ tests/            one file per module, plus shared fakes in tests/support/
 knowledge/        the live, per-topic knowledge base (edit to change what the assistant knows)
 prompts/          the production system prompt
 faq/              human-readable mirror of the knowledge base, not read by the running system
-docs/             supplementary documentation (e.g. a plain-language staff guide)
-data/             SQLite database file (git-ignored, created automatically)
+docs/             deployment, environment, Meta/Instagram setup, and troubleshooting reference
+data/             SQLite database file (git-ignored, created automatically; a Docker volume under docker-compose)
+Dockerfile, docker-compose.yml, .dockerignore   container deployment (see docs/DEPLOYMENT.md)
+SERVER_DAY_CHECKLIST.md                         the exact, ordered list of what's left once the server is reachable
 ```
 
 ## License

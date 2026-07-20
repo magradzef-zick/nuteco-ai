@@ -25,6 +25,8 @@ export interface AppConfig {
   promptsDir: string;
   databasePath: string;
   port: number;
+  /** How often (in ms) to re-run the startup token/health checks for as long as the process runs, so an expired/revoked credential is caught proactively rather than on the next real customer message. 0 disables the periodic re-check entirely (the checks still run once at startup regardless). */
+  tokenHealthCheckIntervalMs: number;
   /**
    * Present only when every INSTAGRAM_* variable is set -- null means
    * Instagram support is simply disabled, so an existing Telegram-only
@@ -91,6 +93,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems
   );
   const port = parsePort(env.PORT, problems);
+  const tokenHealthCheckIntervalMs = parseTokenHealthCheckIntervalMs(env.TOKEN_HEALTH_CHECK_INTERVAL_MS, problems);
   const instagram = parseInstagramConfig(env, problems);
 
   if (problems.length > 0) {
@@ -107,6 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     promptsDir: env.PROMPTS_DIR?.trim() || "./prompts",
     databasePath: env.DATABASE_PATH?.trim() || "./data/nuteco.db",
     port: port!,
+    tokenHealthCheckIntervalMs: tokenHealthCheckIntervalMs!,
     instagram,
   };
 }
@@ -174,6 +178,24 @@ function parsePort(rawValue: string | undefined, problems: string[]): number | u
   const parsed = Number(rawValue);
   if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
     problems.push(`PORT must be a whole number between 1 and 65535, got "${rawValue}".`);
+    return undefined;
+  }
+  return parsed;
+}
+
+/** One hour -- frequent enough that an expired/revoked credential is caught the same day, not so frequent it meaningfully adds to Telegram/Instagram/Gemini API traffic. */
+const DEFAULT_TOKEN_HEALTH_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+function parseTokenHealthCheckIntervalMs(rawValue: string | undefined, problems: string[]): number | undefined {
+  if (!rawValue || !rawValue.trim()) {
+    return DEFAULT_TOKEN_HEALTH_CHECK_INTERVAL_MS;
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    problems.push(
+      `TOKEN_HEALTH_CHECK_INTERVAL_MS must be a non-negative number of milliseconds (0 disables the periodic ` +
+        `re-check), got "${rawValue}".`
+    );
     return undefined;
   }
   return parsed;

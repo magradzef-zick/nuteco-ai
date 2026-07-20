@@ -1,0 +1,24 @@
+# Secrets -- never baked into the image. Injected at container start via
+# docker-compose's env_file instead.
+.env
+.env.save
+
+# Host-installed modules -- native addons (better-sqlite3) must be built
+# inside the container for its own OS/arch, not copied from the host.
+node_modules
+
+# Runtime state -- persisted via a mounted volume (see docker-compose.yml),
+# not part of the image.
+data
+
+# Not used inside the container (tsx runs TypeScript directly).
+dist
+
+# Version control and editor/OS noise.
+.git
+.DS_Store
+*.log
+
+# Documentation and knowledge/prompt content ARE needed at runtime
+# (src/knowledge/loader.ts, src/prompts/loader.ts read them directly), so
+# knowledge/, prompts/, faq/, and docs/ are intentionally NOT excluded here.

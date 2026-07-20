@@ -52,5 +52,10 @@ function migrate(db: Database.Database): void {
       updated_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS processed_messages (
+      message_id TEXT PRIMARY KEY,
+      processed_at INTEGER NOT NULL
+    );
   `);
 }

@@ -44,22 +44,25 @@ const TELEGRAM_BOT_TOKEN_PATTERN = /\d{6,}:[A-Za-z0-9_-]{30,}/g;
 /** Google API keys, e.g. "AIzaSyExampleKeyText1234567890abcdefg" (commonly 39 characters total, but matched as a minimum-length pattern -- deliberately tolerant, the same way the Telegram token pattern above is, rather than requiring an exact length that could quietly stop matching if the actual format is even slightly different than assumed). */
 const GOOGLE_API_KEY_PATTERN = /AIza[A-Za-z0-9_-]{30,}/g;
 /**
- * Any value passed as a `key=` query parameter (how GeminiProvider.ts sends
- * the API key, and the actual point of leakage risk -- a URL, not a
- * string in isolation). Position-based rather than shape-based: does not
- * assume anything about what a Google API key looks like, so it still
- * catches a key whose format changes or was never `AIza`-prefixed to
- * begin with. `[^&\s"']+` stops at the next query-parameter separator, or
- * at whitespace/quote characters if the URL is embedded inside JSON/log
+ * Any value passed as a credential-shaped query parameter -- `key=` (how
+ * GeminiProvider.ts sends the API key) and `access_token=` (how
+ * HttpInstagramTransport.ts sends the Page Access Token on every Graph API
+ * request, including GET requests where it's the only place the token
+ * appears at all), plus the other common names Meta/Google-style REST APIs
+ * use for the same thing. Position-based rather than shape-based: does not
+ * assume anything about what a given provider's credential looks like, so
+ * it still catches one whose format changes or doesn't match a known
+ * prefix pattern. `[^&\s"']+` stops at the next query-parameter separator,
+ * or at whitespace/quote characters if the URL is embedded inside JSON/log
  * text rather than standing alone.
  */
-const KEY_QUERY_PARAM_PATTERN = /([?&]key=)[^&\s"']+/gi;
+const SENSITIVE_QUERY_PARAM_PATTERN = /([?&](?:key|access_token|token|secret|apikey|api_key)=)[^&\s"']+/gi;
 const REDACTED_TOKEN_PLACEHOLDER = "[REDACTED_TOKEN]";
 
 function redactString(value: string): string {
   return value
     .replace(TELEGRAM_BOT_TOKEN_PATTERN, REDACTED_TOKEN_PLACEHOLDER)
-    .replace(KEY_QUERY_PARAM_PATTERN, `$1${REDACTED_TOKEN_PLACEHOLDER}`)
+    .replace(SENSITIVE_QUERY_PARAM_PATTERN, `$1${REDACTED_TOKEN_PLACEHOLDER}`)
     .replace(GOOGLE_API_KEY_PATTERN, REDACTED_TOKEN_PLACEHOLDER);
 }
 

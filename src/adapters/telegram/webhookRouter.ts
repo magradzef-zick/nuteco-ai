@@ -5,6 +5,9 @@ import { createLogger, type Logger } from "../../observability/logger";
 /** How much of an unparseable request body to log -- enough to debug a malformed payload, not so much that logs balloon on a large/garbled body. */
 const PARSE_ERROR_BODY_PREVIEW_LENGTH = 200;
 
+/** Real Telegram update payloads are small JSON, well under this -- a generous cap against a malicious or misbehaving client streaming an unbounded body into memory before any validation runs. */
+const MAX_BODY_SIZE_BYTES = 1_000_000;
+
 export interface TelegramWebhookHandlerOptions {
   /** Telegram's "X-Telegram-Bot-Api-Secret-Token" header value to require, if configured. Null/undefined means no check is performed (see config.ts's securityWarnings for why that's discouraged in production). */
   secretToken?: string | null;
@@ -47,8 +50,21 @@ export function createTelegramWebhookHandler(
     }
 
     const chunks: Buffer[] = [];
+    let receivedBytes = 0;
+    let rejectedForSize = false;
 
     req.on("data", (chunk: Buffer) => {
+      if (rejectedForSize) return;
+
+      receivedBytes += chunk.length;
+      if (receivedBytes > MAX_BODY_SIZE_BYTES) {
+        rejectedForSize = true;
+        logger.warn("webhook.rejected_body_too_large", { receivedBytes });
+        res.writeHead(413, { "content-type": "text/plain" }).end("Payload Too Large");
+        req.destroy();
+        return;
+      }
+
       chunks.push(chunk);
     });
 
@@ -57,6 +73,8 @@ export function createTelegramWebhookHandler(
     });
 
     req.on("end", () => {
+      if (rejectedForSize) return;
+
       const rawBody = Buffer.concat(chunks).toString("utf-8");
 
       let update: unknown;

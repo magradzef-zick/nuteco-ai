@@ -124,6 +124,28 @@ test("rejects an out-of-range PORT", () => {
   assert.throws(() => loadConfig(baseEnv({ PORT: "99999" })), ConfigValidationError);
 });
 
+test("defaults TOKEN_HEALTH_CHECK_INTERVAL_MS to one hour", () => {
+  const config = loadConfig(baseEnv());
+  assert.equal(config.tokenHealthCheckIntervalMs, 60 * 60 * 1000);
+});
+
+test("accepts an explicit TOKEN_HEALTH_CHECK_INTERVAL_MS, including 0 to disable it", () => {
+  assert.equal(loadConfig(baseEnv({ TOKEN_HEALTH_CHECK_INTERVAL_MS: "300000" })).tokenHealthCheckIntervalMs, 300000);
+  assert.equal(loadConfig(baseEnv({ TOKEN_HEALTH_CHECK_INTERVAL_MS: "0" })).tokenHealthCheckIntervalMs, 0);
+});
+
+test("rejects a negative or non-numeric TOKEN_HEALTH_CHECK_INTERVAL_MS with a clear message", () => {
+  try {
+    loadConfig(baseEnv({ TOKEN_HEALTH_CHECK_INTERVAL_MS: "-5" }));
+    assert.fail("expected loadConfig to throw");
+  } catch (error) {
+    assert.ok(error instanceof ConfigValidationError);
+    assert.ok(error.problems.some((p) => p.includes("TOKEN_HEALTH_CHECK_INTERVAL_MS")));
+  }
+
+  assert.throws(() => loadConfig(baseEnv({ TOKEN_HEALTH_CHECK_INTERVAL_MS: "not-a-number" })), ConfigValidationError);
+});
+
 test("treats a blank required variable the same as a missing one", () => {
   try {
     loadConfig(baseEnv({ TELEGRAM_BOT_TOKEN: "   " }));

@@ -160,6 +160,14 @@ export class HttpInstagramTransport implements InstagramTransport {
 function buildApiErrorMessage(path: string, statusCode: number, description: string | undefined): string {
   const base = description ?? `Instagram Graph API call "${path}" failed with status ${statusCode}.`;
 
+  if ((statusCode === 401 || statusCode === 403) && /permission/i.test(base)) {
+    return (
+      `${base} This is a missing OAuth scope on INSTAGRAM_PAGE_ACCESS_TOKEN, not an invalid/expired token -- ` +
+      `the token needs to be regenerated with the missing permission included in the consent scope, then ` +
+      `re-derived via GET /me/accounts (see docs/README for the token acquisition flow).`
+    );
+  }
+
   if (statusCode === 401 || statusCode === 403) {
     return (
       `${base} This usually means INSTAGRAM_PAGE_ACCESS_TOKEN is invalid, expired, or was copied incorrectly -- ` +

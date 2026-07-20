@@ -285,3 +285,23 @@ test("an unsupported update type (e.g. callback_query) is acknowledged and ignor
     await closeServer(server);
   }
 });
+
+test("a request body over the size limit is rejected with 413, not buffered indefinitely", async () => {
+  const { server, transport, logEntries } = setupServer();
+  const baseUrl = await listen(server);
+
+  try {
+    const oversized = "x".repeat(1_000_001);
+    const response = await fetch(`${baseUrl}/telegram/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: oversized,
+    });
+    assert.equal(response.status, 413);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(transport.calls.length, 0);
+    assert.ok(logEntries.some((e) => e.event === "webhook.rejected_body_too_large"));
+  } finally {
+    await closeServer(server);
+  }
+});

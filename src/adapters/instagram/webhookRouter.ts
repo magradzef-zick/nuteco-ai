@@ -5,6 +5,9 @@ import { createLogger, type Logger } from "../../observability/logger";
 /** How much of an unparseable request body to log -- enough to debug a malformed payload, not so much that logs balloon on a large/garbled body. Mirrors telegram/webhookRouter.ts. */
 const PARSE_ERROR_BODY_PREVIEW_LENGTH = 200;
 
+/** Real Instagram webhook payloads are small JSON, even batched -- a generous cap against a malicious or misbehaving client streaming an unbounded body into memory before signature verification runs. Mirrors telegram/webhookRouter.ts. */
+const MAX_BODY_SIZE_BYTES = 1_000_000;
+
 export interface InstagramWebhookHandlerOptions {
   /** The token you chose and entered into the Meta App Dashboard's webhook subscription form -- checked against the GET verification request's hub.verify_token. */
   verifyToken: string;
@@ -82,8 +85,21 @@ function handleDelivery(
   logger.info("webhook.received", { method: req.method });
 
   const chunks: Buffer[] = [];
+  let receivedBytes = 0;
+  let rejectedForSize = false;
 
   req.on("data", (chunk: Buffer) => {
+    if (rejectedForSize) return;
+
+    receivedBytes += chunk.length;
+    if (receivedBytes > MAX_BODY_SIZE_BYTES) {
+      rejectedForSize = true;
+      logger.warn("webhook.rejected_body_too_large", { receivedBytes });
+      res.writeHead(413, { "content-type": "text/plain" }).end("Payload Too Large");
+      req.destroy();
+      return;
+    }
+
     chunks.push(chunk);
   });
 
@@ -92,6 +108,8 @@ function handleDelivery(
   });
 
   req.on("end", () => {
+    if (rejectedForSize) return;
+
     const rawBodyBuffer = Buffer.concat(chunks);
 
     if (options.appSecret && !signatureMatches(rawBodyBuffer, req.headers["x-hub-signature-256"], options.appSecret)) {
