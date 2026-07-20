@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import {
   runStartupChecks,
+  schedulePeriodicHealthCheck,
   knowledgeBaseCheck,
   systemPromptCheck,
   databaseCheck,
@@ -147,4 +148,44 @@ test("llmProviderCheck passes when the provider's health check succeeds", async 
 test("llmProviderCheck fails with a clear, actionable message when the health check fails", async () => {
   const check = llmProviderCheck(fakeLlmProvider(new Error("API key not valid")));
   await assert.rejects(() => check.run(), /GEMINI_API_KEY.*GEMINI_MODEL/s);
+});
+
+test("schedulePeriodicHealthCheck re-runs the checks on the given interval and logs failures without throwing", async () => {
+  const { logger, entries } = fakeLogger();
+  const checks: StartupCheck[] = [
+    {
+      name: "always fails",
+      run: async () => {
+        throw new Error("token expired");
+      },
+    },
+  ];
+
+  const timer = schedulePeriodicHealthCheck(checks, 10, logger);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 45));
+  } finally {
+    clearInterval(timer);
+  }
+
+  const failures = entries.filter((e) => e.event === "token_health_check.failed");
+  assert.ok(failures.length >= 1, "expected at least one periodic failure to be logged");
+  assert.match(String(failures[0].fields.error), /token expired/);
+});
+
+test("schedulePeriodicHealthCheck logs nothing extra when the checks keep passing", async () => {
+  const { logger, entries } = fakeLogger();
+  const checks: StartupCheck[] = [{ name: "always passes", run: async () => {} }];
+
+  const timer = schedulePeriodicHealthCheck(checks, 10, logger);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 45));
+  } finally {
+    clearInterval(timer);
+  }
+
+  assert.equal(
+    entries.filter((e) => e.event === "token_health_check.failed").length,
+    0
+  );
 });

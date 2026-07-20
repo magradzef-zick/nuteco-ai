@@ -110,3 +110,33 @@ test("complete() throws if called for a customer with no active batch (a caller 
   const debouncer = new MessageDebouncer();
   assert.throws(() => debouncer.complete("never-admitted", ["m1"]));
 });
+
+test("a message recorded in the persisted store is treated as a duplicate, even by a fresh debouncer instance", () => {
+  const recorded = new Set<string>();
+  const persistedStore = {
+    has: (messageId: string) => recorded.has(messageId),
+    record: (messageId: string) => {
+      recorded.add(messageId);
+    },
+  };
+
+  const debouncer = new MessageDebouncer({ persistedStore });
+  debouncer.admit({ customerId: "c1", messageId: "m1", sequence: 1, payload: "a" });
+  debouncer.complete("c1", ["m1"]);
+
+  // Simulates a process restart: a brand-new MessageDebouncer, with no
+  // in-memory history of its own, backed by the same underlying store.
+  const afterRestart = new MessageDebouncer({ persistedStore });
+  const result = afterRestart.admit({ customerId: "c1", messageId: "m1", sequence: 1, payload: "a" });
+  assert.equal(result.action, "duplicate");
+});
+
+test("without a persisted store, a fresh debouncer instance has no memory of prior messages", () => {
+  const debouncer = new MessageDebouncer();
+  debouncer.admit({ customerId: "c1", messageId: "m1", sequence: 1, payload: "a" });
+  debouncer.complete("c1", ["m1"]);
+
+  const afterRestart = new MessageDebouncer();
+  const result = afterRestart.admit({ customerId: "c1", messageId: "m1", sequence: 1, payload: "a" });
+  assert.equal(result.action, "process", "sanity check -- this is the pre-existing, unpersisted behavior");
+});
