@@ -3,6 +3,7 @@ import type { AppConfig } from "./config/config";
 import { openDatabase } from "./storage/sqlite/connection";
 import { SqliteCustomerIdentityRepository } from "./storage/sqlite/SqliteCustomerIdentityRepository";
 import { SqliteConversationStateRepository } from "./storage/sqlite/SqliteConversationStateRepository";
+import { SqliteProcessedMessageStore } from "./storage/sqlite/SqliteProcessedMessageStore";
 import type { CustomerIdentityRepository } from "./storage/CustomerIdentityRepository";
 import type { ConversationStateRepository } from "./storage/ConversationStateRepository";
 import { HttpTelegramTransport } from "./adapters/telegram/HttpTelegramTransport";
@@ -73,7 +74,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
   const messageSender = new PlatformRoutingMessageSender(sendersByPlatform);
   const identityRepository = new SqliteCustomerIdentityRepository(db);
   const conversationStateRepository = new SqliteConversationStateRepository(db);
-  const debouncer = new MessageDebouncer();
+  const debouncer = new MessageDebouncer({ persistedStore: new SqliteProcessedMessageStore(db) });
   const llmProvider = new GeminiProvider({ apiKey: config.geminiApiKey, model: config.geminiModel, logger });
 
   const handleMessages = createConversationEngine({

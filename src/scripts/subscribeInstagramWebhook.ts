@@ -1,3 +1,4 @@
+import { loadEnvIfPresent } from "../shared/loadEnvIfPresent";
 import { loadConfig } from "../config/config";
 import { HttpInstagramTransport } from "../adapters/instagram/HttpInstagramTransport";
 import { createLogger } from "../observability/logger";
@@ -14,11 +15,16 @@ import { createLogger } from "../observability/logger";
  * telling Meta which fields to actually deliver for this specific page.
  *
  * Run once, after both the Dashboard webhook URL is set AND every
- * INSTAGRAM_* variable is configured in .env:
+ * INSTAGRAM_* variable is configured:
  *
- *   node --env-file=.env --import tsx src/scripts/subscribeInstagramWebhook.ts
+ *   node --import tsx src/scripts/subscribeInstagramWebhook.ts
+ *
+ * Loads .env itself if one is present (see loadEnvIfPresent.ts) -- works
+ * unchanged locally (where .env exists) and inside Docker (where it
+ * doesn't; env vars are already injected via docker-compose).
  */
 async function main(): Promise<void> {
+  loadEnvIfPresent();
   const logger = createLogger();
   const config = loadConfig();
 

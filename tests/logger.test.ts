@@ -103,6 +103,20 @@ test("a key=... query value is redacted even when it doesn't match the AIza-pref
   assert.match(entry.requestUrl, /\[REDACTED_TOKEN\]/);
 });
 
+test("an access_token=... query value (how HttpInstagramTransport.ts sends the Page Access Token) is redacted", async () => {
+  const logger = createLogger();
+  const pageAccessToken = "EAAExamplePageAccessTokenText1234567890abcdefg";
+  const { errorLines } = await captureConsole(() => {
+    logger.error("instagram_api.error", {
+      requestUrl: `https://graph.facebook.com/v21.0/17841406082256694/messages?access_token=${pageAccessToken}`,
+    });
+  });
+
+  const entry = JSON.parse(errorLines[0]);
+  assert.doesNotMatch(entry.requestUrl, new RegExp(pageAccessToken));
+  assert.match(entry.requestUrl, /\[REDACTED_TOKEN\]/);
+});
+
 test("a bot-token-shaped string is redacted even inside an unrelated field, e.g. a URL", async () => {
   const logger = createLogger();
   const { errorLines } = await captureConsole(() => {

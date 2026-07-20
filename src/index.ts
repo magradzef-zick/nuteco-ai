@@ -1,4 +1,5 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { loadEnvIfPresent } from "./shared/loadEnvIfPresent";
 import { loadConfig, securityWarnings, ConfigValidationError } from "./config/config";
 import { buildDependencies, handleIncomingTelegramUpdate, handleIncomingInstagramUpdate } from "./composition";
 import { createTelegramWebhookHandler } from "./adapters/telegram/webhookRouter";
@@ -7,6 +8,7 @@ import { loadKnowledgeBase } from "./knowledge/loader";
 import { loadSystemPrompt } from "./prompts/loader";
 import {
   runStartupChecks,
+  schedulePeriodicHealthCheck,
   knowledgeBaseCheck,
   systemPromptCheck,
   databaseCheck,
@@ -21,6 +23,42 @@ import { createLogger } from "./observability/logger";
 
 const TELEGRAM_WEBHOOK_PATH = "/telegram/webhook";
 const INSTAGRAM_WEBHOOK_PATH = "/instagram/webhook";
+/** Deliberately cheap -- confirms the HTTP server itself is accepting connections, not that every downstream dependency (DB, Telegram, Gemini, Instagram) is still reachable right now. Startup validation already gates all of that before the process ever starts listening; re-checking it on every health probe would make the healthcheck itself a source of false negatives during a transient third-party hiccup. Intended for Docker's HEALTHCHECK / a load balancer probe. */
+const HEALTH_CHECK_PATH = "/health";
+
+export type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
+
+/**
+ * The full route table, as a standalone function so it's unit-testable
+ * without booting the whole process (real config, real DB, real network
+ * calls to Telegram/Gemini/Instagram) the way `main()` below does. `main()`
+ * is just this function wired up with the real handlers.
+ */
+export function createRequestHandler(options: {
+  telegramWebhookHandler: RequestHandler;
+  instagramWebhookHandler: RequestHandler | null;
+}): RequestHandler {
+  return (req, res) => {
+    const pathname = new URL(req.url ?? "", "http://localhost").pathname;
+
+    if (pathname === HEALTH_CHECK_PATH) {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    if (pathname === TELEGRAM_WEBHOOK_PATH) {
+      options.telegramWebhookHandler(req, res);
+      return;
+    }
+
+    if (options.instagramWebhookHandler && pathname === INSTAGRAM_WEBHOOK_PATH) {
+      options.instagramWebhookHandler(req, res);
+      return;
+    }
+
+    res.writeHead(404).end();
+  };
+}
 
 /**
  * The real process entrypoint. This is the one file in the whole project
@@ -28,8 +66,14 @@ const INSTAGRAM_WEBHOOK_PATH = "/instagram/webhook";
  * is built and tested against fakes. Running this file is where a real
  * TELEGRAM_BOT_TOKEN and a real GEMINI_API_KEY both become necessary, at
  * the `telegramTokenCheck` / `llmProviderCheck` steps below.
+ *
+ * Loads .env itself if one is present (see loadEnvIfPresent.ts) -- the
+ * same entrypoint command works unchanged locally (where .env exists) and
+ * inside Docker (where it doesn't; env vars are already injected via
+ * docker-compose's env_file).
  */
 async function main(): Promise<void> {
+  loadEnvIfPresent();
   const logger = createLogger();
   logger.info("startup.begin", {});
 
@@ -89,21 +133,7 @@ async function main(): Promise<void> {
       })
     : null;
 
-  const server = createServer((req, res) => {
-    const pathname = new URL(req.url ?? "", "http://localhost").pathname;
-
-    if (pathname === TELEGRAM_WEBHOOK_PATH) {
-      telegramWebhookHandler(req, res);
-      return;
-    }
-
-    if (instagramWebhookHandler && pathname === INSTAGRAM_WEBHOOK_PATH) {
-      instagramWebhookHandler(req, res);
-      return;
-    }
-
-    res.writeHead(404).end();
-  });
+  const server = createServer(createRequestHandler({ telegramWebhookHandler, instagramWebhookHandler }));
 
   const shutdown = createShutdownHandler({
     server,
@@ -118,15 +148,26 @@ async function main(): Promise<void> {
   server.listen(config.port, () => {
     logger.info("startup.success", { port: config.port, instagramEnabled: config.instagram !== null });
   });
+
+  if (config.tokenHealthCheckIntervalMs > 0) {
+    schedulePeriodicHealthCheck(startupChecks, config.tokenHealthCheckIntervalMs, logger);
+  }
 }
 
-main().catch((error) => {
-  if (error instanceof ConfigValidationError) {
-    console.error(error.message);
-  } else if (error instanceof StartupValidationError) {
-    console.error(error.message);
-  } else {
-    console.error("Failed to start:", error);
-  }
-  process.exitCode = 1;
-});
+// Only run as a side effect when this file is the actual process entrypoint
+// (`node ... src/index.ts`) -- not when it's imported elsewhere, e.g. tests
+// importing `createRequestHandler` above. Without this guard, importing this
+// module for its exports would also boot the real app (real config, real
+// network calls) as an unwanted side effect.
+if (require.main === module) {
+  main().catch((error) => {
+    if (error instanceof ConfigValidationError) {
+      console.error(error.message);
+    } else if (error instanceof StartupValidationError) {
+      console.error(error.message);
+    } else {
+      console.error("Failed to start:", error);
+    }
+    process.exitCode = 1;
+  });
+}

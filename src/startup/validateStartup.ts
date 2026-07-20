@@ -63,6 +63,34 @@ export async function runStartupChecks(checks: StartupCheck[], logger: Logger = 
   }
 }
 
+/**
+ * Re-runs the same startup checks on a fixed interval for as long as the
+ * process is running, so a token that was valid at startup but later
+ * expires/gets revoked (Telegram, Instagram, or Gemini) shows up in the
+ * logs on its own, instead of only being discovered the next time a real
+ * customer message happens to fail. Deliberately never throws or crashes
+ * the process on failure -- a periodic health signal that could itself
+ * take the app down would be worse than not having it; the point is
+ * visibility (an operator watching logs/alerts), not enforcement.
+ *
+ * `.unref()` so this timer never keeps the process alive on its own --
+ * graceful shutdown (src/lifecycle/shutdown.ts) does not need to know
+ * about it.
+ */
+export function schedulePeriodicHealthCheck(
+  checks: StartupCheck[],
+  intervalMs: number,
+  logger: Logger
+): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    runStartupChecks(checks, logger).catch((error) => {
+      logger.error("token_health_check.failed", { error: (error as Error).message });
+    });
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
 /** Confirms the configured knowledge base actually loads and isn't empty. */
 export function knowledgeBaseCheck(loadKnowledgeBaseFn: () => string): StartupCheck {
   return {
