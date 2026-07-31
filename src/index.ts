@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
 import { loadEnvIfPresent } from "./shared/loadEnvIfPresent";
 import { loadConfig, securityWarnings, ConfigValidationError } from "./config/config";
 import { buildDependencies, handleIncomingTelegramUpdate, handleIncomingInstagramUpdate } from "./composition";
@@ -25,6 +26,20 @@ const TELEGRAM_WEBHOOK_PATH = "/telegram/webhook";
 const INSTAGRAM_WEBHOOK_PATH = "/instagram/webhook";
 /** Deliberately cheap -- confirms the HTTP server itself is accepting connections, not that every downstream dependency (DB, Telegram, Gemini, Instagram) is still reachable right now. Startup validation already gates all of that before the process ever starts listening; re-checking it on every health probe would make the healthcheck itself a source of false negatives during a transient third-party hiccup. Intended for Docker's HEALTHCHECK / a load balancer probe. */
 const HEALTH_CHECK_PATH = "/health";
+/**
+ * The customer-facing privacy policy (`public/privacy.html`). Served by
+ * this process rather than by nginx because nginx already proxies this
+ * whole domain here, so a location block would be a second place to keep
+ * in sync for no gain -- and because Meta requires a reachable privacy
+ * policy URL before an app can be published at all, which makes this page
+ * a deployment dependency, not a nice-to-have. Read from disk per request:
+ * it is one small file served a handful of times a month, and reading it
+ * live means correcting the text needs no redeploy, matching how
+ * knowledge/ and prompts/ already work.
+ */
+const PRIVACY_POLICY_PATH = "/privacy";
+/** Resolved from the working directory, the same convention `KNOWLEDGE_BASE_DIR`/`PROMPTS_DIR` already use -- this process is always started from the project root. */
+const PRIVACY_POLICY_FILE = "./public/privacy.html";
 
 export type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -43,6 +58,22 @@ export function createRequestHandler(options: {
 
     if (pathname === HEALTH_CHECK_PATH) {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
+    if (pathname === PRIVACY_POLICY_PATH) {
+      let html: string;
+      try {
+        html = readFileSync(PRIVACY_POLICY_FILE, "utf-8");
+      } catch {
+        // Missing file is a deployment problem, not a request problem --
+        // answer honestly rather than serving an empty page that would
+        // still pass Meta's reachability check while telling a customer
+        // nothing.
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" }).end("Privacy policy is temporarily unavailable.");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
       return;
     }
 

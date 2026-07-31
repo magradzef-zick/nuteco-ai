@@ -44,6 +44,34 @@ test("GET /health returns 200 with a status payload, without touching either web
   }
 });
 
+test("GET /privacy serves the real privacy policy Meta requires to be reachable", async () => {
+  const calls: string[] = [];
+  const server = createServer(
+    createRequestHandler({
+      telegramWebhookHandler: recordingHandler(calls, "telegram"),
+      instagramWebhookHandler: recordingHandler(calls, "instagram"),
+    })
+  );
+  const baseUrl = await listen(server);
+
+  try {
+    const response = await fetch(`${baseUrl}/privacy`);
+    assert.equal(response.status, 200, "an unpublishable app is a deployment failure, so this must not 404");
+    assert.match(response.headers.get("content-type") ?? "", /text\/html/);
+
+    const html = await response.text();
+    // The page has to actually describe this system's data handling -- a
+    // reachable-but-empty page would still satisfy Meta and tell a
+    // customer nothing.
+    assert.match(html, /Политика конфиденциальности/);
+    assert.match(html, /Privacy Policy/);
+    assert.match(html, /Gemini/, "the LLM the message text is sent to must be disclosed");
+    assert.deepEqual(calls, [], "serving the policy must not invoke either webhook handler");
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("/telegram/webhook dispatches to the Telegram handler", async () => {
   const calls: string[] = [];
   const server = createServer(
