@@ -149,6 +149,8 @@ src/
   index.ts        process entrypoint
 tests/            one file per module, plus shared fakes in tests/support/
 knowledge/        the live, per-topic knowledge base (edit to change what the assistant knows)
+knowledge/prices.md  the client's price list — the only source of prices and sizes, and what the
+                     catalogue guardrail checks every quoted price against (src/engine/priceCatalog.ts)
 prompts/          the production system prompt
 faq/              human-readable mirror of the knowledge base, not read by the running system
 docs/             deployment, environment, Meta/Instagram setup, and troubleshooting reference
