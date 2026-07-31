@@ -1,42 +1,28 @@
 /**
- * Deterministic language detection for the three languages this business
- * actually serves (Russian, Uzbek, English) -- a backstop for cases where
- * Gemini either isn't being asked (a deterministic pre-filter
- * short-circuit) or can't be trusted/reached at all (guardrail block, API
- * outage, store outage). This module exists so every customer-facing
- * message, including ones that never touch the model, can still be
- * chosen in the right language, without depending on Gemini being
- * reachable.
+ * Picks between Russian, Uzbek and English without asking the model --
+ * needed whenever the model isn't consulted or can't be reached, so
+ * fallback messages still land in the right language.
  *
- * Not a general-purpose language identification library -- deliberately
- * scoped to distinguishing exactly the three buckets this business's real
- * conversations contain, using script plus a small set of high-frequency
- * Uzbek word stems. Heavy code-switching mid-conversation is normal for
- * this customer base; this only classifies the current turn's text,
- * matching the system prompt's own "reply in the language of the
- * customer's MOST RECENT message" rule -- not track a language across a
- * whole conversation.
+ * Not a general language identifier: script plus a short list of frequent
+ * Uzbek stems, enough for these three. Classifies the current turn only,
+ * matching the prompt's "reply in the language of the most recent
+ * message" rule; code-switching mid-conversation is normal here.
  *
- * Two things worth being deliberate about here:
- * 1. Plain `\b` in a JavaScript regex is defined relative to
- *    `[A-Za-z0-9_]` only and silently never matches next to a Cyrillic
- *    letter. `startsAfterBoundary` below checks the character immediately
- *    before a match manually instead of relying on `\b` around Cyrillic
- *    text.
- * 2. Uzbek is agglutinative -- suffixes attach directly to a word stem
- *    with no separator ("yaxshi" + "misiz" = "yaxshimisiz", "qancha" +
- *    "lik" = "qanchalik"). A whole-word match list (`\bqancha\b`) misses
- *    every suffixed form, which is most real usage. Matching a word STEM
- *    at a left boundary without requiring a right one means a suffix
- *    attached directly after the stem still counts as a match.
+ * Two traps:
+ * 1. `\b` never matches next to Cyrillic (it's defined over
+ *    `[A-Za-z0-9_]`), so `startsAfterBoundary` checks the preceding
+ *    character by hand.
+ * 2. Uzbek is agglutinative -- "yaxshi" + "misiz" = "yaxshimisiz". Whole-
+ *    word matching misses most real usage, so stems match at a left
+ *    boundary only, letting a suffix follow directly.
  */
 
 export type DetectedLanguage = "ru" | "uz" | "en";
 
-/** Letters that exist in Uzbek Cyrillic but not in Russian -- an unambiguous signal on their own, no boundary logic needed since they never occur in Russian text at all. */
+/** Exist in Uzbek Cyrillic but not Russian, so no boundary logic needed. */
 const UZBEK_CYRILLIC_LETTERS = /[ўқғҳЎҚҒҲ]/;
 
-/** High-frequency Uzbek word stems, Cyrillic form -- includes common informal spellings (e.g. "канча" alongside the more correct "қанча", since real typing often substitutes the plain "к"). */
+/** Frequent Uzbek stems, Cyrillic. Includes informal spellings ("канча" for "қанча") since people type the plain "к". */
 const UZBEK_CYRILLIC_STEMS = [
   "рахмат",
   "яхши",
@@ -120,16 +106,10 @@ function containsStemAt(text: string, stems: string[]): boolean {
 }
 
 /**
- * Classifies `text` as "ru", "uz", or "en". Falls back to "ru" when
- * there's no usable signal at all (empty text, or text with no alphabetic
- * characters) -- Russian is the most common language in this business's
- * customer base, and a wrong default is easy for the customer to correct
- * by simply continuing in their own language. Script dominance is
- * measured in matched Uzbek/other
- * words, not raw character counts -- a single short foreign loanword
- * embedded in an otherwise Russian sentence ("Есть Bodon?") must not flip
- * the whole message's classification just because that one word happens
- * to be in Latin script.
+ * Defaults to "ru" with no usable signal -- the commonest language here,
+ * and a wrong guess costs nothing since the customer just keeps writing.
+ * Dominance is counted in words, not characters, so one Latin loanword in
+ * a Russian sentence ("Есть Bodon?") can't flip the classification.
  */
 export function detectLanguage(text: string): DetectedLanguage {
   const cyrillicWordCount = countWordsContaining(text, "[а-яёўқғҳ]");
@@ -142,16 +122,12 @@ export function detectLanguage(text: string): DetectedLanguage {
   const hasUzbekCyrillicWord = UZBEK_CYRILLIC_LETTERS.test(text) || containsStemAt(text, UZBEK_CYRILLIC_STEMS);
   const hasUzbekLatinWord = containsStemAt(text, UZBEK_LATIN_STEMS);
 
-  // A recognized Uzbek word/stem is a strong, specific signal regardless
-  // of which script has more words overall -- check this before falling
-  // back to plain script-dominance.
+  // A recognized Uzbek stem beats raw script dominance.
   if (hasUzbekCyrillicWord || hasUzbekLatinWord) {
     return "uz";
   }
 
-  // Ties (e.g. one short Russian sentence plus one embedded Latin-script
-  // product name) resolve to Russian, the documented default for this
-  // corpus -- see the module doc comment.
+  // Ties go to Russian.
   if (cyrillicWordCount >= latinWordCount) {
     return "ru";
   }

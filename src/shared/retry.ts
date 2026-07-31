@@ -1,25 +1,16 @@
 /**
- * A small, deterministic retry helper for calling any external HTTP API.
- * Originally written for Telegram's Bot API (see HttpTelegramTransport.ts);
- * moved here, unchanged, so the Gemini provider (src/llm/gemini/) could
- * reuse it instead of duplicating the same retry/backoff logic a second
- * time. Nothing in this file is provider-specific -- it only knows about
- * "an attempt succeeded or failed, and if it failed, whether that's worth
- * retrying," which every HTTP-based provider needs the same way.
+ * Retry with backoff for any HTTP API. Nothing provider-specific: it only
+ * knows whether an attempt failed and whether that's worth retrying.
  *
- * The delay function (`sleep`) is always injected, never `setTimeout`
- * called directly inside the retry loop itself -- the same determinism
- * principle used throughout this project (see MessageDebouncer.ts and the
- * storage layer's explicit `now` parameters): a test can supply an instant,
- * recording fake and verify exactly what delay would have been requested,
- * without actually waiting for it.
+ * `sleep` is injected rather than calling setTimeout here, so a test can
+ * assert the delay that would have been requested without waiting for it.
  */
 
 export interface AttemptFailure {
   error: Error;
   /** Whether this specific failure is worth retrying at all. */
   retryable: boolean;
-  /** If Telegram told us exactly how long to wait (a 429's retry_after), honor that instead of guessing. */
+  /** Honor a server-supplied wait (a 429's retry_after) instead of guessing. */
   retryAfterMs?: number;
 }
 
@@ -28,14 +19,14 @@ export type AttemptResult<T> = { outcome: "success"; result: T } | { outcome: "f
 export interface RetryOptions {
   /** Total attempts, including the first -- e.g. 3 means "try once, then up to 2 retries". */
   maxAttempts: number;
-  /** Base delay for exponential backoff when Telegram hasn't told us a specific retry_after. */
+  /** Base for exponential backoff when the server gave no retry_after. */
   baseDelayMs: number;
   sleep: (ms: number) => Promise<void>;
-  /** Called right before each retry sleep -- the caller's hook for logging/observability. Retry.ts itself stays logger-agnostic and reusable. */
+  /** Logging hook, called before each retry sleep. Keeps this file logger-agnostic. */
   onRetry?: (attemptNumber: number, delayMs: number, error: Error) => void;
 }
 
-/** Plain exponential backoff, no jitter -- deliberately simple and deterministic; this is a single process talking to Telegram, not a fleet where thundering-herd avoidance matters. */
+/** No jitter: one process, not a fleet, so there's no thundering herd to avoid. */
 export function computeBackoffMs(attemptNumber: number, baseDelayMs: number): number {
   return baseDelayMs * 2 ** (attemptNumber - 1);
 }

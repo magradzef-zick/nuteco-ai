@@ -5,21 +5,15 @@ import type { LlmProvider } from "../llm/LlmProvider";
 import { createLogger, type Logger } from "../observability/logger";
 
 /**
- * Everything that must be true before this process starts accepting real
- * traffic. Each check is independent and reports its own failure, so a
- * misconfigured deployment gets one clear list of what's wrong instead of
- * a confusing crash three requests in. This is intentionally separate
- * from config validation (config.ts): config validation checks that
- * *values are well-formed*; this checks that those values actually *work*
- * against the real systems they point to (a database connection that's
- * actually queryable, a Telegram token that's genuinely valid, a
- * knowledge base that has content).
+ * What must be true before the process takes real traffic. Checks are
+ * independent so a misconfigured deployment gets one clear list instead of
+ * a crash three requests in.
  *
- * Fail-fast, no partial startup: `main()` (src/index.ts) builds all
- * dependencies first (which itself fails immediately if, say, the
- * database file can't be created at all), then runs every check here
- * before ever binding the HTTP port -- so a startup failure never leaves
- * the process half-listening for traffic it can't actually handle.
+ * Separate from config.ts on purpose: that checks values are well-formed,
+ * this checks they actually work against the systems they point at.
+ *
+ * Runs before the HTTP port is bound, so a failure never leaves the
+ * process half-listening.
  */
 
 export interface StartupCheck {

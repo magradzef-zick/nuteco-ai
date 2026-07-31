@@ -1,31 +1,18 @@
 /**
- * Structured (JSON-lines) logging with automatic secret redaction. This is
- * the only place `console.log`/`console.error` should be called anywhere
- * in the codebase -- every other module accepts a `Logger` and calls that
- * instead, so redaction can never be accidentally skipped by writing
- * straight to the console somewhere.
+ * JSON-lines logging with secret redaction. The only place console.* is
+ * called: everything else takes a `Logger`, so redaction can't be skipped
+ * by writing straight to the console.
  *
- * Two independent layers of redaction, deliberately overlapping:
- * 1. Field-name based: any field whose name looks like "token", "secret",
- *    "password", or "apikey" (case-insensitive) is replaced outright,
- *    regardless of its value.
- * 2. Pattern based: known secret shapes are scanned for and redacted
- *    wherever they appear in a fully-serialized log line -- including
- *    inside a URL or a nested error message/stack trace, which field-name
- *    redaction alone would miss. Covers Telegram bot tokens (embedded
- *    directly in every Telegram API request URL -- see
- *    HttpTelegramTransport.ts) and Google API keys (embedded directly in
- *    every Gemini API request URL -- see GeminiProvider.ts). Any future
- *    provider that puts a secret in a URL should add its shape here too.
+ * Two overlapping layers:
+ * 1. By field name -- "token", "secret", "password", "apikey".
+ * 2. By pattern, over the serialized line, so secrets inside a URL or a
+ *    nested stack trace are caught too. Both Telegram and Gemini put
+ *    theirs in the request URL; a new provider that does the same should
+ *    add its shape here.
  *
- *    Google API keys are matched two ways, deliberately redundant: a
- *    `key=` query-parameter pattern (position-based -- redacts whatever
- *    value Google puts there, regardless of its internal shape) and an
- *    `AIza`-prefix pattern (shape-based, for the common case, and for the
- *    rare event a key appears somewhere that isn't a `key=` parameter).
- *    The position-based pattern is the one that actually matters: it was
- *    added after a real key was seen that didn't start with `AIza` at
- *    all, which the shape-based pattern alone would have silently missed.
+ * Google keys are matched both by `key=` position and by the `AIza`
+ * prefix. Position is the one that matters -- it was added after a real
+ * key turned up that didn't start with `AIza`.
  */
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

@@ -1,45 +1,27 @@
 /**
- * A deterministic check that a price the assistant states actually belongs
- * to the product (and the size) it is stating it for.
+ * Checks that a price the assistant states belongs to the product and size
+ * it claims.
  *
- * Why this exists on top of `hallucinationGuardrail.ts`: that check asks
- * "does this number appear anywhere in the knowledge base, in a roughly
- * matching context category?". Once the client's real price list is in the
- * knowledge base, that question is far too weak -- every price in the
- * catalogue is a real number in a "product" context, so quoting the
- * hazelnut paste price for pistachio paste, or the 1 kg price for a 500 g
- * jar, passes it cleanly. Those are exactly the mistakes that cost this
- * business money.
+ * hallucinationGuardrail.ts only asks whether a number appears somewhere in
+ * the knowledge base. With a real price list in there that is far too weak:
+ * every catalogue price is a real number in a product context, so the
+ * hazelnut price quoted for pistachio, or the 1 kg price for a 500 g jar,
+ * passes it cleanly.
  *
- * The catalogue is parsed out of the knowledge-base text that was injected
- * into the model for this same turn -- deliberately not from a second,
- * separately-maintained copy. Editing `knowledge/prices.md` therefore moves
- * the prompt and this check together, with no redeploy and no way for the
- * two to drift apart.
+ * The catalogue is parsed out of the same text the model was given, not a
+ * second copy, so editing knowledge/prices.md moves both together.
  *
- * Products are matched by whole inflected words, and where several
- * catalogue lines match, the longest name wins -- so "арахисовая паста без
- * мёда" is held to its own 23.000 and never allowed the 25.000 of the line
- * with honey.
- *
- * When a reply names no catalogue product at all, this check abstains and
- * leaves the number to the generic guardrail. Abstaining is the right
- * default there: a false escalation is a real cost too, and a number with
- * no product attached is not a catalogue claim.
+ * Abstains when the reply names no catalogue product -- a number with no
+ * product attached isn't a catalogue claim, and false escalations cost too.
  */
 
-/** Below this, a spreadsheet cell holds a size or a footnote marker rather than a price (the cheapest real line is 20.000). */
+/** Below this a cell holds a size or a marker, not a price. Cheapest real line is 20.000. */
 const MIN_PRICE_VALUE = 1000;
 
-/** A stem this short would match half the catalogue; three characters is the floor that still lets "чиа" work. */
+/** Short enough for "чиа", long enough not to match half the catalogue. */
 const MIN_STEM_LENGTH = 3;
 
-/**
- * How many catalogue lines a stem may appear in and still count as
- * identifying a specific product. "пас" (paste) occurs in over a dozen
- * lines and identifies nothing; "тахи" occurs in one and identifies that
- * line on its own.
- */
+/** "пас" occurs in a dozen lines and identifies nothing; "тахи" occurs in one. */
 const MAX_LINES_PER_DISCRIMINATIVE_STEM = 3;
 
 export interface CatalogEntry {
@@ -55,7 +37,7 @@ export interface Catalog {
   entries: CatalogEntry[];
   /** Stems that identify few enough lines to be worth matching on. */
   discriminativeStems: Set<string>;
-  /** Every packing size the price list sells anything in, so a stated size can be told apart from an order quantity. */
+  /** Every packing size sold, so a stated size can be told apart from an order quantity. */
   knownSizes: Set<number>;
 }
 
@@ -69,12 +51,7 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/ё/g, "е");
 }
 
-/**
- * Truncates a word so ordinary Russian inflection doesn't break matching:
- * "миндальная"/"миндальной"/"миндальную" all reduce to a common prefix,
- * while "миндальная" and "миндаль" (a different catalogue line) stay
- * distinct.
- */
+/** "миндальная"/"миндальной"/"миндальную" collapse to one prefix; "миндаль" (a different line) stays distinct. */
 function stemOf(word: string): string {
   return word.slice(0, Math.max(MIN_STEM_LENGTH, word.length - 2));
 }
@@ -88,16 +65,13 @@ function stemsOf(productName: string): string[] {
 }
 
 /**
- * How much longer than its stem a word may be and still be the same word.
- * Russian inflection adds an ending, not a new root -- "фисташковая" is
- * "фисташков" plus two letters. Without this bound, stems match by bare
- * substring and "арахис" (the crushed-peanut line, stem "арах") silently
- * matches "арахисовая" (the paste and flour lines), so a price from one is
- * accepted for the other.
+ * Inflection adds an ending, not a new root. Without this bound stems match
+ * by bare substring and "арах" (crushed peanut) matches "арахисовая" (the
+ * paste and flour lines), letting one line's price vouch for another's.
  */
 const MAX_INFLECTION_LENGTH = 3;
 
-/** Whether `word` is an inflected form of `stem` -- same root, ordinary ending, not a longer different word. */
+/** Whether `word` is an inflected form of `stem` rather than a longer, different word. */
 function wordMatchesStem(word: string, stem: string): boolean {
   return word.startsWith(stem) && word.length <= stem.length + MAX_INFLECTION_LENGTH;
 }
@@ -124,12 +98,10 @@ function isSeparatorRow(cells: string[]): boolean {
 }
 
 /**
- * Extracts every price table from the knowledge-base text. A table counts
- * as a price table only if all of its header columns after the first are
- * size labels ("200 гр", "1 кг") -- which is what makes this safe to run
- * over the whole knowledge base rather than one designated file: the
- * product/notes table in `products.md` and the payment-methods table in
- * `delivery.md` have prose headers and are ignored.
+ * A table counts as a price table only if every header column after the
+ * first is a size label. That is what makes this safe to run over the whole
+ * knowledge base: the prose tables in products.md and delivery.md are
+ * ignored.
  */
 export function parsePriceCatalog(knowledgeBaseText: string): Catalog {
   const entries: CatalogEntry[] = [];
@@ -169,10 +141,9 @@ export function parsePriceCatalog(knowledgeBaseText: string): Catalog {
       pricesBySize.set(size, digits);
     });
 
-    // A row whose every cell is a dash is kept, not dropped: it is a
-    // product the price list names and deliberately gives no price for
-    // (soy lecithin, marzipan). Keeping it is what lets a price attached
-    // to it be recognized as invented rather than simply unrecognized.
+    // An all-dash row is kept: the price list names the product and gives
+    // no price for it (lecithin, marzipan). Keeping it lets a price
+    // attached to it read as invented rather than merely unrecognized.
     entries.push({ product, stems: stemsOf(product), pricesBySize });
   }
 
@@ -194,18 +165,10 @@ export function parsePriceCatalog(knowledgeBaseText: string): Catalog {
 }
 
 /**
- * Catalogue lines the given text names.
- *
- * Preference order matters. A full-name match ("арахисовая мука" -> the
- * Арахисовая мука line) is precise, and precision is what makes the size
- * check worth anything -- so when any line matches in full, only those
- * count. Individually, neither "арахисов" nor "мук" identifies anything;
- * together they identify exactly one line, and no single-stem rule can see
- * that.
- *
- * Only when nothing matches in full does this fall back to "one stem
- * specific enough to identify a line on its own" ("тахини"), which is
- * looser but still better than abstaining.
+ * Full-name matches win when there are any: neither "арахисов" nor "мук"
+ * identifies a line alone, but together they identify exactly one, and no
+ * single-stem rule sees that. Falls back to one sufficiently rare stem
+ * ("тахини") only when nothing matches in full.
  */
 function mentionedEntries(text: string, catalog: Catalog): CatalogEntry[] {
   const words = wordsOf(text);
@@ -224,12 +187,10 @@ function mentionedEntries(text: string, catalog: Catalog): CatalogEntry[] {
  * Drops any full-name match that another full-name match strictly extends.
  *
  * "Арахисовая паста без мёда" contains every word of "Арахисовая паста с
- * мёдом" plus "без", so a reply about the honey-free jar matches both lines
- * and would be allowed either line's price -- 23.000 and 25.000 are both
- * real numbers, and quoting the wrong one is exactly the kind of lie this
- * exists to stop. The longer name is the one the reply actually named, so
- * it wins outright. Same for "Миндальная мука" against "Миндальная мука
- * кето".
+ * мёдом" plus "без", so a reply about the honey-free jar matches both and
+ * would be allowed either price. Both are real numbers; quoting the wrong
+ * one is the exact lie this exists to stop. Same for "Миндальная мука"
+ * against "Миндальная мука кето".
  */
 function mostSpecific(matches: CatalogEntry[]): CatalogEntry[] {
   return matches.filter(
@@ -261,18 +222,16 @@ function priceOffsetsOn(line: string): number[] {
 }
 
 /**
- * The packing size a price on this line refers to.
+ * Which packing size a price on this line refers to.
  *
- * One `size — price` pair per line (the shape the system prompt mandates)
- * is unambiguous. A whole ladder on one line -- "150 гр — 75.000, 500 гр —
- * 225.000, 1 кг — 450.000" -- is too, but not by proximity: the second
- * price sits nearer to the third size than to its own. What actually holds
- * is order. When a line names as many sizes as prices, the n-th price
- * belongs to the n-th size, and that is true of both ways this gets
- * written ("150 гр — 75.000" and "75.000 за 150 гр").
+ * Pairing by proximity is wrong for a one-line ladder: in "150 гр —
+ * 75.000, 500 гр — 225.000" the second price sits nearer the third size
+ * than its own. Order holds instead -- with as many sizes as prices, the
+ * n-th price belongs to the n-th size, in both "150 гр — 75.000" and
+ * "75.000 за 150 гр" wordings.
  *
- * Returns every size on the line when the counts don't line up, so a price
- * is still held to the sizes under discussion rather than waved through.
+ * Falls back to every size on the line when the counts disagree, so the
+ * price is still checked rather than waved through.
  */
 function sizesGoverning(line: string, priceOffset: number): number[] {
   const sizes = sizesOn(line);
@@ -293,13 +252,9 @@ function lineContaining(text: string, index: number): { line: string; offsetInLi
 }
 
 /**
- * Returns the subset of `claims` that the reply attributes to a catalogue
- * product they do not belong to -- wrong product, or the right product's
- * price for the wrong size.
- *
- * `claims` are the number-like tokens already extracted from the reply by
- * the hallucination guardrail; this function only judges the ones that look
- * like prices and only when the reply names a catalogue product.
+ * The subset of `claims` attributed to the wrong product, or to the right
+ * product at a size it isn't sold in. `claims` come from the hallucination
+ * guardrail's own extraction.
  */
 export function findMisattributedPrices(reply: string, claims: string[], catalog: Catalog): string[] {
   if (catalog.entries.length === 0) return [];
@@ -310,25 +265,21 @@ export function findMisattributedPrices(reply: string, claims: string[], catalog
   return claims.filter((claim) => {
     const digits = canonicalNumber(claim);
     if (digits.length === 0) return false;
-    // A claim carrying a unit ("2 кг", "4 months") is a quantity, not a price.
-    // Everything else that reached here is price-shaped, at any magnitude:
-    // an invented "800 сум" is as much a lie as an invented "800.000".
+    // A claim with a unit ("2 кг", "4 months") is a quantity. Everything
+    // else here is price-shaped at any magnitude: an invented "800 сум" is
+    // as much a lie as an invented "800.000".
     if (/[a-zа-яё%]/i.test(claim)) return false;
 
-    // Every occurrence is judged, not just the first: a price ladder that
-    // states one size correctly and repeats the same figure for a second,
-    // wrong size must still be caught.
+    // Every occurrence, not just the first: a ladder that states one size
+    // correctly and repeats the figure for a wrong one must still be caught.
     for (let from = 0; ; ) {
       const claimIndex = reply.indexOf(claim, from);
       if (claimIndex === -1) break;
       from = claimIndex + claim.length;
 
       const { line, offsetInLine } = lineContaining(reply, claimIndex);
-      // A multi-item reply (an order summary, two products compared) names
-      // a different product on each line -- when this line names one, judge
-      // this price against that product alone rather than against the union
-      // of everything the whole reply mentions, which would let each
-      // product's price stand in for the other's.
+      // An order summary names a different product per line. Judging against
+      // the whole reply's union would let each product's price cover the other.
       const lineLevelMentions = mentionedEntries(line, catalog);
       const mentioned = lineLevelMentions.length > 0 ? lineLevelMentions : replyLevelMentions;
 
