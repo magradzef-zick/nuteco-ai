@@ -8,7 +8,8 @@ The assistant is not meant to replace staff. It absorbs the repetitive front-lin
 
 - **Telegram and Instagram webhook integration** — small, framework-free HTTP handlers that acknowledge the platform immediately and process updates asynchronously, so slow processing never causes a delivery retry. Both run on the same process and share the same conversation engine; Instagram support is entirely optional and off by default (see Environment variables).
 - **Knowledge-base-grounded replies** — the assistant only answers from a set of per-topic markdown files, injected directly into the model's context. Editing a file changes what the assistant knows within about a minute, with no redeploy.
-- **Deterministic hallucination guardrail** — every reply is checked after generation: any price, percentage, or quantity that isn't actually backed by the knowledge base blocks the reply and triggers an escalation instead.
+- **Deterministic hallucination guardrail** — every reply is checked after generation: any price, percentage, or quantity that isn't actually backed by the knowledge base blocks the reply and triggers an escalation instead. Amounts are compared by digits, so a reformatted figure (`25 000` for the price list's `25.000`) is still checked rather than slipping past unrecognized.
+- **Price-catalogue check** — the client's price list is parsed back out of the same text the model was given, and every price the assistant states is held to the exact product row and size column it claims. A real catalogue price attached to the wrong product, or a 1 kg price quoted for a 500 g jar, is caught — "the number exists somewhere" is not enough once a full price list is in the knowledge base.
 - **Deterministic B2B/wholesale detection** — a keyword-based pre-filter runs before the model is even called, so an unambiguous wholesale signal escalates immediately regardless of what the model would have judged.
 - **Message debouncing** — rapid-fire messages from the same customer are coalesced into a single batch, and duplicate or retried webhook deliveries (Telegram redelivery, Instagram's batched events) are handled idempotently.
 - **Trilingual fallback messages** — Russian, Uzbek, and English. Escalation and error messages are chosen by a deterministic language detector, independent of the model, so a customer still gets a reply in their own language even when the model is unreachable.
@@ -52,6 +53,15 @@ The knowledge base is injected into every call in full ("full-context stuffing")
 - **Testing:** Node's built-in test runner (`node:test`), no external test framework.
 - **Tooling:** `tsx` for running TypeScript directly in development, `tsc` for type-checking/build.
 
+## HTTP routes
+
+| Route | Purpose |
+|---|---|
+| `POST /telegram/webhook` | Telegram update deliveries. |
+| `POST /instagram/webhook` | Instagram Direct Message deliveries, plus the one-time `GET` verification handshake Meta performs when the callback URL is configured. |
+| `GET /health` | Cheap liveness probe — confirms the server is accepting connections. |
+| `GET /privacy` | The customer-facing privacy policy (`public/privacy.html`). Meta will not let an app be published without a reachable privacy policy URL, and an unpublished app receives no Instagram webhooks at all, so this route is a deployment dependency rather than paperwork. Read from disk per request, so the wording can be corrected without a redeploy. |
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in the values below. [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) has the fuller reference, including Docker-specific notes on how these get into the container.
@@ -73,6 +83,7 @@ Copy `.env.example` to `.env` and fill in the values below. [`docs/ENVIRONMENT.m
 | `INSTAGRAM_VERIFY_TOKEN` | No* | — | A random string you choose, entered into the Meta App Dashboard's webhook subscription form; echoed back on the one-time GET verification request. |
 | `INSTAGRAM_PAGE_ID` | No* | — | The Instagram-linked Facebook Page ID. Used to subscribe the page to webhook events. |
 | `INSTAGRAM_GRAPH_API_VERSION` | No | `v21.0` | Override if Meta deprecates the default. |
+| `INSTAGRAM_GRAPH_BASE_URL` | No | `https://graph.facebook.com` | Which Graph host to call. Meta serves Instagram messaging from two hosts and the correct one is decided by how the token was issued, not by preference: `graph.facebook.com` for a Page token, `graph.instagram.com` for an Instagram-scoped token (one that starts with `IGAA`). Calling the wrong host fails with a permission error that never names the host as the cause. |
 
 \* All `INSTAGRAM_*` variables are all-or-nothing: leave every one of them unset to run Telegram-only, or set all of them to also handle Instagram Direct Messages. Setting only some is a configuration error the app refuses to start with.
 
