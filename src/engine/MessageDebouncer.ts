@@ -1,36 +1,23 @@
 /**
- * Deterministically coalesces rapid-fire messages from the same customer
- * into a single processing batch, and makes duplicate/edited message
- * deliveries idempotent -- all without relying on wall-clock timing (a
- * fixed-time debounce window was rejected because correctness must never
- * depend on how many milliseconds apart two messages happen to arrive --
- * that would make behavior nondeterministic and hard to test reliably).
+ * Coalesces rapid-fire messages from one customer into a single batch and
+ * makes redelivery idempotent, without a timer: a fixed debounce window
+ * would make correctness depend on arrival milliseconds.
  *
- * The protocol:
- * 1. Every inbound message is passed to admit(). The caller acts on the
- *    result:
- *    - "duplicate": ignore it completely, nothing to do.
- *    - "queued": do nothing now -- this message will be included the next
- *      time a batch is handed back for this customer.
- *    - "process": a batch of messages (sorted into chronological order by
- *      `sequence`, not arrival order) is ready. Process it, then call
- *      complete().
- * 2. complete() marks the batch's messages as done and, if more messages
- *    queued up while it was working, immediately returns the next batch --
- *    the caller must process that one too, and call complete() again,
- *    until it returns null. This is what makes coalescing deterministic:
- *    the trigger for "there's more to do" is the previous batch finishing,
- *    an event, never a timer.
+ * Protocol:
+ * 1. Pass every message to admit(), then act on the result:
+ *    - "duplicate": ignore.
+ *    - "queued": nothing to do; it joins the next batch.
+ *    - "process": a batch (ordered by `sequence`, not arrival) is ready --
+ *      handle it, then call complete().
+ * 2. complete() marks the batch done and returns the next one if messages
+ *    queued meanwhile. Keep going until it returns null. The trigger is
+ *    the previous batch finishing, never a timer -- that's what makes it
+ *    deterministic.
  *
- * Known, documented scope limit: once a message ID has been included in a
- * batch that is currently in flight or already completed, any further
- * delivery of that same ID (a duplicate webhook redelivery, or a customer
- * editing a message after we've already started or finished answering it)
- * is treated as a duplicate and ignored. Handling "the customer edited
- * their message after we replied" as a distinct, visible behavior is a
- * conversation-flow decision left to a higher layer -- this
- * infrastructure-level component intentionally does not decide that on
- * its own.
+ * Scope limit: once an ID is in a batch that is in flight or done, any
+ * further delivery of it is a duplicate. Treating "customer edited after
+ * we replied" as its own behavior is a conversation-flow decision for a
+ * higher layer.
  */
 
 export interface InboundMessage {
