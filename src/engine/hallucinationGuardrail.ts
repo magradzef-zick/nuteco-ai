@@ -28,13 +28,26 @@
  *   unrelated fact that happens to share the same digits. This is a known,
  *   deliberate scope boundary, not an oversight.
  * - It is one layer, not the only layer -- the system prompt's own
- *   instructions are the first layer.
+ *   instructions are the first layer, and `priceCatalog.ts` is a third,
+ *   stricter one for catalogue prices specifically (right number, wrong
+ *   product), which this module runs and folds into the same result.
  */
 
+import { findMisattributedPrices, parsePriceCatalog } from "./priceCatalog";
+
 const NUMBER_PATTERNS: RegExp[] = [
-  // Thousand-separated amounts, e.g. "150.000", "1.200.000" -- this
-  // business's price format (see knowledge/products.md).
+  // Thousand-separated amounts, e.g. "150.000", "1.200.000" -- the format
+  // the price list uses and the system prompt tells the model to keep.
   /\b\d{1,3}(?:\.\d{3})+\b/g,
+  // The same amounts written with the other separators people actually
+  // type -- "150 000", "150 000" (nbsp), "150,000". Without these, a model
+  // that simply reformatted a price wrote a number this check never even
+  // looked at, which is the opposite of failing safe.
+  /\b\d{1,3}(?:[ \u00A0,]\d{3})+\b/g,
+  // A bare price-like run of digits, e.g. "150000" -- the format the
+  // client's spreadsheet itself uses, so it is exactly what a model is
+  // most likely to echo.
+  /\b\d{4,7}\b/g,
   // Percentages, e.g. "12%", "4.5%".
   /\b\d+(?:[.,]\d+)?\s?%/g,
   // A number directly followed by a unit word this business actually uses,
@@ -143,6 +156,16 @@ export interface GuardrailResult {
 }
 
 /**
+ * An amount named as money, however short. The patterns above deliberately
+ * ignore runs of fewer than four digits, because most short numbers in a
+ * reply are quantities -- but "800 сум" is a price claim, and a price claim
+ * has to be checked no matter how small the figure. Only the digits are
+ * taken, so the amount is compared against the price list the same way any
+ * other price is.
+ */
+const CURRENCY_AMOUNT_PATTERN = /(?<!\d)(\d{1,3}(?:[ \u00A0.,]\d{3})*)\s?(?:сум|сўм|so'm|som|sum)(?![a-zа-яё])/gi;
+
+/**
  * Extracts every number-like token in `text` that matches one of the
  * patterns above, without duplicates, in first-seen order.
  */
@@ -153,6 +176,9 @@ function extractNumberClaims(text: string): string[] {
     for (const match of matches) {
       found.add(match.trim());
     }
+  }
+  for (const match of text.matchAll(CURRENCY_AMOUNT_PATTERN)) {
+    found.add(match[1].trim());
   }
   return [...found];
 }
@@ -191,6 +217,22 @@ function allIndicesOf(text: string, needle: string): number[] {
 }
 
 /**
+ * Every way the same amount can legitimately be written, so that a model
+ * which reformatted a price ("25 000" for the price list's "25.000") is
+ * still checked against the figure it actually came from instead of
+ * sailing past as an unrecognized token. Only applies to pure amounts --
+ * anything carrying a unit or a percent sign is matched literally.
+ */
+function writtenVariantsOf(claim: string): string[] {
+  const digits = claim.replace(/\D/g, "");
+  if (digits.length < 4 || !/^[\d.,\s ]+$/.test(claim)) {
+    return [claim];
+  }
+  const grouped = (separator: string) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, separator);
+  return [...new Set([claim, digits, grouped("."), grouped(" "), grouped(","), grouped(" ")])];
+}
+
+/**
  * A claim verifies if at least one non-disclaimed knowledge-base occurrence
  * of the exact digit string shares a context category with the reply's own
  * usage -- or if the reply's own context gives no recognizable category at
@@ -199,15 +241,17 @@ function allIndicesOf(text: string, needle: string): number[] {
  * numbers).
  */
 function isVerifiedInContext(claim: string, replyWindow: string, knowledgeBaseContext: string): boolean {
-  const kbIndices = allIndicesOf(knowledgeBaseContext, claim);
-  if (kbIndices.length === 0) {
+  const occurrences = writtenVariantsOf(claim).flatMap((variant) =>
+    allIndicesOf(knowledgeBaseContext, variant).map((index) => ({ index, length: variant.length }))
+  );
+  if (occurrences.length === 0) {
     return false;
   }
 
   const replyCategories = categoriesFor(replyWindow);
 
-  for (const index of kbIndices) {
-    const kbWindow = windowAround(knowledgeBaseContext, index, claim.length);
+  for (const { index, length } of occurrences) {
+    const kbWindow = windowAround(knowledgeBaseContext, index, length);
     if (isNonQuotable(kbWindow)) {
       continue;
     }
@@ -236,11 +280,20 @@ export function checkForUnverifiedNumbers(
 ): GuardrailResult {
   const claims = extractNumberClaims(reply);
 
-  const unverifiedNumbers = claims.filter((claim) => {
+  const unverified = claims.filter((claim) => {
     const firstIndex = reply.indexOf(claim);
     const replyWindow = firstIndex === -1 ? reply : windowAround(reply, firstIndex, claim.length);
     return !isVerifiedInContext(claim, replyWindow, knowledgeBaseContext);
   });
+
+  // Present-in-the-knowledge-base is necessary but nowhere near sufficient
+  // once the real price list is in there: every catalogue price is a real
+  // number in a product context, so quoting one product's price for another
+  // product, or the 1 kg price for a 500 g jar, passes the check above
+  // cleanly. See priceCatalog.ts.
+  const misattributed = findMisattributedPrices(reply, claims, parsePriceCatalog(knowledgeBaseContext));
+
+  const unverifiedNumbers = [...new Set([...unverified, ...misattributed])];
 
   return {
     safe: unverifiedNumbers.length === 0,

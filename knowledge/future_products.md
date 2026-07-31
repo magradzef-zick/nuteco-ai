@@ -8,11 +8,17 @@
 - By mid-2026: Nuteco had developed a trial batch and was actively running a feedback campaign with existing B2B confectionery clients ("Мы разработали пробную партию МАРЦИПАНА и хотели бы узнать Ваше профессиональное мнение"), described as 60% almond, 35% powdered sugar, 4% glucose syrup.
 - **Current assistant behavior:** do not state marzipan is generally available for retail order unless the client confirms it has moved past B2B sampling. If a customer asks, say the product is in development/limited trial and escalate if they want to actually order it.
 
-## Praline — pistachio and walnut
+## Praline — pistachio
+
+**Pistachio praline is no longer a future product.** It is a line in the current price list ([`prices.md`](prices.md)), sold in 1 кг only, and it should be answered from there like any other catalogue item — not from this file.
+
+Historical context only — do not quote any of it: a 2023-era figure of ~392,000/kg with NDS appears in old conversations, and do not quote the 5kg made-to-order minimum mentioned once in 2024 either. Neither is current; the price list supersedes both.
+
+## Praline — walnut
 
 - 2024: mentioned once as an existing made-to-order SKU with a 5kg minimum order.
-- Pricing seen historically: pistachio praline ~392,000/kg with NDS (2023-era figure, do not treat as current).
-- **Current assistant behavior:** treat as a real but limited/made-to-order product; confirm current minimum order size and price with the client before quoting; if unsure, escalate.
+- Not in the current price list.
+- **Current assistant behavior:** don't quote a price or a minimum order; say it's part of the upcoming line and hand off to a manager.
 
 ## Praline — hazelnut
 

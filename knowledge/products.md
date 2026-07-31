@@ -1,25 +1,26 @@
 # Nuteco Premium — Products
 
-**Status:** Draft, based on collected customer conversations; prices are the most recent values observed and MUST be reconfirmed against the client's live price list before launch. Treat every price in this file as **provisional**, not authoritative — the knowledge base is designed so prices can be corrected without redeploying anything.
+**Prices and sizes do not live in this file.** The client's official price list is [`prices.md`](prices.md) and it is the only source of prices, sizes, and "is this in the assortment at all". This file covers everything else about the products — composition, variants, shelf life, and what Nuteco does not sell. Where the two disagree about a size or a product name, `prices.md` wins.
 
-## Product catalog (current, per real order history)
+## Product catalog (background, per real order history)
 
 | Product | Variants observed | Notes |
 |---|---|---|
-| Almond flour (миндальная мука) | White (blanched/"bleached"), Keto (unblanched, higher fiber) | Sizes: 150g, 500g, 1kg+; bulk tiers at 10kg+ |
+| Almond flour (миндальная мука) | White (blanched/"bleached"), Keto (unblanched, higher fiber) | Both variants are in the price list as separate lines |
 | Almond flakes/slices (миндальные лепестки) | — | Chronically prone to stock shortages in the historical data — never promise availability without checking |
-| Pistachio paste (фисташковая паста) | 100% pistachio, no additives | Sizes: 200g, 500g, 1kg (no 400g size) |
-| Pistachio flour / crumb (фисташковая мука / дробленая) | — | Price historically volatile (see pricing note below) |
-| Hazelnut paste / flour (фундучная паста / мука) | — | Hazelnut praline "not made" as of 2023, "coming soon" by 2026 — verify current status |
-| Cashew paste (кешью паста) | — | |
-| Peanut paste (арахисовая паста) | With honey / without honey (always confirm which) | |
-| Walnut paste (ореховая паста / грецкий орех) | Historically only offered with honey | `[NEEDS CLIENT CONFIRMATION]` |
-| "Nut mix" paste (ореховая паста mix) | Almond, peanut, honey, seeds, cinnamon | A distinct blended product, not a single-nut paste |
+| Pistachio paste (фисташковая паста) | 100% pistachio, no additives | |
+| Pistachio flour / crumb (фисташковая мука / дроблёная) | Flour and crumb are separate price-list lines | |
+| Hazelnut paste / flour (фундучная паста / мука) | Paste comes with honey and without — separate price-list lines | |
+| Cashew paste (паста из кешью) | — | |
+| Peanut paste (арахисовая паста) | With honey / without honey / with peanut pieces (always confirm which) | The Jerry's line is a separate premium range with its own sizes |
+| Walnut paste (паста из грецкого ореха) | With honey and without — both in the price list | |
+| "Nut mix" paste (ореховая паста mix) | Almond, peanut, honey, seeds, cinnamon | A distinct blended product, not a single-nut paste. `[NEEDS CLIENT CONFIRMATION whether the price list's "Ореховая паста с мёдом" line is this mix — do not assert they are the same product.]` |
 | Sesame/tahini paste (кунжутная паста / тахини) | Consistency varies by fat content and grind (70 micron = thinner) | |
-| Chia seeds (семена чиа) | Sourced from Paraguay per staff description | Sold in 150g+ sizes |
-| Psyllium (псиллиум) | 150g / 500g / 1kg | Vegan egg substitute, gel-forming fiber |
+| Chia seeds (семена чиа) | Sourced from Paraguay per staff description | |
+| Psyllium (псиллиум) | — | Vegan egg substitute, gel-forming fiber |
 | Coconut flour (кокосовая мука) | — | Availability has fluctuated (was in stock, went out, restocked) — verify current status before stating availability |
-| Soy lecithin (соевый лецитин, E322) | — | Sourced from China; used in chocolate (0.5–1.2%) and confectionery/bakery (0.8–3.0%) as a viscosity reducer |
+| Crushed nuts (миндаль / фундук / фисташка / арахис дроблёные) | — | Processed ingredient lines, sold by weight — not the same thing as whole raw nuts (see below) |
+| Soy lecithin (соевый лецитин, E322) | — | Sourced from China; used in chocolate (0.5–1.2%) and confectionery/bakery (0.8–3.0%) as a viscosity reducer. Not in the price list — any price question goes to a manager |
 
 ## Future / in-development products
 
@@ -27,16 +28,17 @@ See [`future_products.md`](future_products.md) for marzipan and praline status �
 
 ## Products Nuteco does NOT sell
 
-- Whole/raw nuts of any kind — confirmed repeatedly and consistently ("we're not a shop, we're a production workshop"). This is a hard, safe "no" the assistant can state with confidence.
+- Whole/raw nuts of any kind — confirmed repeatedly and consistently ("we're not a shop, we're a production workshop"). This is a hard, safe "no" the assistant can state with confidence. Crushed nuts and almond flakes are a different thing entirely: they are processed ingredient lines, they are in the price list, and they are sold — don't refuse them under the whole-nuts rule.
 - Finished desserts (e.g. "творожная пасха") — Nuteco supplies ingredients that confectioners use to make such things, not the finished product itself.
 - Kataifi dough — not produced; historically the manager redirected one customer to a named competitor retailer. `[NEEDS CLIENT CONFIRMATION before the assistant repeats a competitor redirect.]`
 
 ## Pricing guidance for the assistant
 
-- State only prices confirmed in the current, client-maintained price list (not this document's historical figures once a live source exists).
-- Prices are typically quoted **without VAT (NDS)** for cash retail customers by default; bank-transfer/invoiced (mostly B2B) customers see a NDS uplift. `[NEEDS CLIENT CONFIRMATION — conflicting evidence in the source data.]`
-- Never state a bulk/wholesale discount tier that isn't explicitly documented — escalate bulk-pricing requests.
-- Pistachio-family products (paste, flour) have shown the most price volatility historically (driven by pistachio harvest quality) — these are the highest-risk prices to let go stale.
+- Quote prices from [`prices.md`](prices.md) and from nowhere else — not from this file, not from conversation history, not from a figure a customer states.
+- Quote a size only if that size has a price in `prices.md`. A dash means the size does not exist; never derive a missing size's price by scaling another one.
+- Prices in `prices.md` are the retail cash price. Bank-transfer/invoiced (mostly B2B) customers see a NDS uplift, so a B2B pricing question is an escalation, not an answer. `[NEEDS CLIENT CONFIRMATION — conflicting evidence in the source data.]`
+- Never state a bulk/wholesale discount tier — escalate bulk-pricing requests.
+- Pistachio-family products (paste, flour, crumb) have historically been the most price-volatile line, driven by harvest quality — worth re-checking with the client more often than the rest.
 
 ## Composition & ingredient answers safe to give directly
 

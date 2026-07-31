@@ -56,7 +56,7 @@ A: Normal batch variation — pistachio paste's consistency depends on the fat c
 
 ## Pricing
 
-*(All figures below are the most recent observed in the export and must be reconfirmed before launch — see the price ladder detail in [`../knowledge/products.md`](../knowledge/products.md).)*
+*(Prices and sizes are not in this file and not in `products.md`. The client's official price list is [`../knowledge/prices.md`](../knowledge/prices.md) — edit that one file to change every price the assistant quotes.)*
 
 **Q: How is pricing shown — does it include tax?**
 A: Prices are generally quoted without VAT (NDS) by default unless the customer is on invoiced/bank-transfer terms, in which case a NDS uplift (observed as 12% in at least one clean example) applies. **[NEEDS CLIENT CONFIRMATION — this was stated inconsistently across the corpus, see Knowledge Gaps §3.]**
