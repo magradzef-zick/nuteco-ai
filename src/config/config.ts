@@ -11,6 +11,18 @@ export interface InstagramConfig {
   verifyToken: string;
   pageId: string;
   graphApiVersion: string;
+  /**
+   * Which Graph host to call. Meta serves Instagram messaging from two
+   * different hosts depending on how the account was authorized:
+   * `graph.facebook.com` for a Page token (Instagram API with Facebook
+   * login) and `graph.instagram.com` for an Instagram-scoped token
+   * (Instagram API with Instagram login). Same request shapes, same
+   * endpoints -- different host, and calling the wrong one fails with a
+   * confusing permission error rather than anything that names the real
+   * problem. Configurable so switching between the two is an .env change,
+   * not a code change.
+   */
+  graphBaseUrl: string;
 }
 
 export interface AppConfig {
@@ -154,6 +166,9 @@ function parseInstagramConfig(env: NodeJS.ProcessEnv, problems: string[]): Insta
     verifyToken: rawValues.INSTAGRAM_VERIFY_TOKEN!,
     pageId: rawValues.INSTAGRAM_PAGE_ID!,
     graphApiVersion: env.INSTAGRAM_GRAPH_API_VERSION?.trim() || "v21.0",
+    // Defaults to the Facebook-login host this project shipped with, so an
+    // existing deployment keeps working untouched.
+    graphBaseUrl: (env.INSTAGRAM_GRAPH_BASE_URL?.trim() || "https://graph.facebook.com").replace(/\/+$/, ""),
   };
 }
 

@@ -67,7 +67,22 @@ test("loads a complete Instagram config when every INSTAGRAM_* variable is set",
     verifyToken: "ig-verify-token",
     pageId: "17841400000000000",
     graphApiVersion: "v21.0",
+    graphBaseUrl: "https://graph.facebook.com",
   });
+});
+
+test("INSTAGRAM_GRAPH_BASE_URL selects the Instagram-login host, trailing slash and all", () => {
+  const config = loadConfig(
+    baseEnv({
+      INSTAGRAM_PAGE_ACCESS_TOKEN: "ig-page-token",
+      INSTAGRAM_APP_SECRET: "ig-app-secret",
+      INSTAGRAM_VERIFY_TOKEN: "ig-verify-token",
+      INSTAGRAM_PAGE_ID: "17841400000000000",
+      INSTAGRAM_GRAPH_BASE_URL: "https://graph.instagram.com/",
+    })
+  );
+
+  assert.equal(config.instagram?.graphBaseUrl, "https://graph.instagram.com");
 });
 
 test("an explicit INSTAGRAM_GRAPH_API_VERSION overrides the default", () => {

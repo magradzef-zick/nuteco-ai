@@ -66,6 +66,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
       pageAccessToken: config.instagram.pageAccessToken,
       pageId: config.instagram.pageId,
       graphApiVersion: config.instagram.graphApiVersion,
+      baseUrl: config.instagram.graphBaseUrl,
       logger,
     });
     sendersByPlatform.instagram = new InstagramMessageSender({ transport: instagramTransport });
