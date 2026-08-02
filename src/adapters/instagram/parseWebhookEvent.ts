@@ -18,6 +18,8 @@ interface InstagramMessagingMessage {
   /** True only on a message the page itself sent, echoed back by the webhook -- see the is_echo check below. */
   is_echo?: boolean;
   attachments?: InstagramAttachment[];
+  /** Present when this references one of this business's own Stories -- a tap-to-react sends this with no `text` and no `attachments` at all, which is why that case needs its own check below rather than falling into the generic media/voice fallback. */
+  reply_to?: { story?: unknown };
 }
 
 interface InstagramMessagingEvent {
@@ -91,6 +93,17 @@ function parseMessagingEvent(event: InstagramMessagingEvent): ParsedUpdateResult
       // sends would loop back in as a new "message" to answer.
       return { kind: "unsupported", updateType: "message_echo" };
     }
+    if (isContentless(event.message)) {
+      // No text and no attachment -- a tap-to-react on our Story is the
+      // known real case (see `reply_to` above), but the check itself
+      // doesn't depend on that field: no real customer message (a typed
+      // reply, a voice note, a photo) is ever completely empty, so
+      // anything this bare has nothing for the assistant to answer.
+      // Left to fall through, this used to reach the customer as "I
+      // can't listen to voice messages or view photos/videos yet" --
+      // nonsensical for someone who just tapped an emoji.
+      return { kind: "unsupported", updateType: "contentless_message" };
+    }
     return { kind: "message", message: toInboundMessage(event, event.message) };
   }
 
@@ -123,6 +136,10 @@ function toInboundMessage(event: InstagramMessagingEvent, message: InstagramMess
     sequence: event.timestamp,
     payload: normalized,
   };
+}
+
+function isContentless(message: InstagramMessagingMessage): boolean {
+  return !message.text && (message.attachments?.length ?? 0) === 0;
 }
 
 function detectMediaType(message: InstagramMessagingMessage): InstagramMediaType | null {

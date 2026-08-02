@@ -48,6 +48,36 @@ test("a message the page itself sent (is_echo) is treated as unsupported, not a 
   assert.deepEqual(results, [{ kind: "unsupported", updateType: "message_echo" }]);
 });
 
+test("a tap-to-react on our Story (no text, no attachment) is treated as unsupported, not a customer message", () => {
+  const results = parseInstagramWebhookEvent(
+    webhookPayload([
+      textMessagingEvent({ message: { mid: "mid.reaction1", reply_to: { story: { id: "17800", url: "https://..." } } } }),
+    ])
+  );
+
+  assert.deepEqual(results, [{ kind: "unsupported", updateType: "contentless_message" }]);
+});
+
+test("a message with neither text nor attachments is unsupported even without a reply_to (belt and suspenders)", () => {
+  const results = parseInstagramWebhookEvent(webhookPayload([textMessagingEvent({ message: { mid: "mid.empty1" } })]));
+
+  assert.deepEqual(results, [{ kind: "unsupported", updateType: "contentless_message" }]);
+});
+
+test("a real story reply with actual text is answered normally, not treated as a bare reaction", () => {
+  const results = parseInstagramWebhookEvent(
+    webhookPayload([
+      textMessagingEvent({
+        message: { mid: "mid.storyreply1", text: "А сколько стоит?", reply_to: { story: { id: "17800" } } },
+      }),
+    ])
+  );
+
+  assert.equal(results[0].kind, "message");
+  if (results[0].kind !== "message") return;
+  assert.equal((results[0].message.payload as NormalizedInstagramMessage).text, "А сколько стоит?");
+});
+
 const mediaCases: Array<[string, string]> = [
   ["image", "image"],
   ["audio", "audio"],
