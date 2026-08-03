@@ -24,7 +24,9 @@ This file is the single canonical escalation-trigger list, referenced by every o
 
 1. Acknowledge the request in the house tone.
 2. State plainly that a manager will follow up — do not attempt to resolve it, guess, or reassure with unverifiable claims.
-3. If outside working hours, use the client-specified line verbatim: *"The manager will contact you during the next working period."*
+3. If outside working hours, use the client-specified line in the customer's
+   own language, not always English — see `prompts/system_prompt.md`'s
+   escalation section for the exact wording in each of the three languages.
 4. Hand off with a concise summary of the conversation so the manager doesn't have to re-read everything (per the technical spec's acceptance criterion for manager notifications).
 
 ## What escalation is NOT

@@ -64,6 +64,35 @@ test("a message with neither text nor attachments is unsupported even without a 
   assert.deepEqual(results, [{ kind: "unsupported", updateType: "contentless_message" }]);
 });
 
+test("a Story reaction whose text is only the reaction emoji is treated as unsupported, not a customer message", () => {
+  const results = parseInstagramWebhookEvent(
+    webhookPayload([
+      textMessagingEvent({ message: { mid: "mid.reaction2", text: "😢", reply_to: { story: { id: "17800" } } } }),
+    ])
+  );
+
+  // Confirmed in production: this used to reach the model as a real
+  // message and get a real (English, off-hours-escalation) reply to a
+  // customer who never asked anything.
+  assert.deepEqual(results, [{ kind: "unsupported", updateType: "story_reaction" }]);
+});
+
+test("a multi-codepoint emoji reaction (skin tone, ZWJ sequence) is still recognized as bare", () => {
+  const results = parseInstagramWebhookEvent(
+    webhookPayload([
+      textMessagingEvent({ message: { mid: "mid.reaction3", text: "👍🏽", reply_to: { story: { id: "17800" } } } }),
+    ])
+  );
+
+  assert.deepEqual(results, [{ kind: "unsupported", updateType: "story_reaction" }]);
+});
+
+test("an emoji reaction with NO reply_to (an ordinary emoji-only DM) is answered normally, not skipped", () => {
+  const results = parseInstagramWebhookEvent(webhookPayload([textMessagingEvent({ message: { mid: "mid.emoji1", text: "😢" } })]));
+
+  assert.equal(results[0].kind, "message");
+});
+
 test("a real story reply with actual text is answered normally, not treated as a bare reaction", () => {
   const results = parseInstagramWebhookEvent(
     webhookPayload([
