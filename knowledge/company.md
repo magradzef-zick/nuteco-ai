@@ -18,7 +18,7 @@ Monday–Friday, 10:00–18:00. Wholesale order/delivery cutoff for same-day dis
 
 `[NEEDS CLIENT CONFIRMATION]` — historical messages in the source conversations state these hours inconsistently over time (10:00–17:00 appears in some, 10:00–18:00 in others). Use the figures above as the working assumption (most recent broadcast in the data) but confirm with the client before launch.
 
-**Outside working hours:** the assistant stays available for product/FAQ questions at all times; only human manager handoff is time-gated. When escalating outside working hours, use this line (client-specified, verbatim): *"The manager will contact you during the next working period."*
+**Outside working hours:** the assistant stays available for product/FAQ questions at all times; only human manager handoff is time-gated. When escalating outside working hours, use the client-specified line in the customer's own language — see `prompts/system_prompt.md`'s escalation section for the exact wording in each of the three languages; it is not an English-only line.
 
 ## Certifications
 

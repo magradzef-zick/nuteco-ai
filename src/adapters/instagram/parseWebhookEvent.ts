@@ -18,7 +18,14 @@ interface InstagramMessagingMessage {
   /** True only on a message the page itself sent, echoed back by the webhook -- see the is_echo check below. */
   is_echo?: boolean;
   attachments?: InstagramAttachment[];
-  /** Present when this references one of this business's own Stories -- a tap-to-react sends this with no `text` and no `attachments` at all, which is why that case needs its own check below rather than falling into the generic media/voice fallback. */
+  /**
+   * Present when this references one of this business's own Stories.
+   * Instagram sends a Story reaction two different ways depending on how
+   * the customer tapped it: sometimes as a message with neither `text` nor
+   * `attachments` (see `isContentless`), sometimes as a message whose
+   * `text` is literally the reaction emoji itself, still with `reply_to`
+   * set. Both are a reaction, not a message -- see `isBareStoryReaction`.
+   */
   reply_to?: { story?: unknown };
 }
 
@@ -94,15 +101,21 @@ function parseMessagingEvent(event: InstagramMessagingEvent): ParsedUpdateResult
       return { kind: "unsupported", updateType: "message_echo" };
     }
     if (isContentless(event.message)) {
-      // No text and no attachment -- a tap-to-react on our Story is the
-      // known real case (see `reply_to` above), but the check itself
-      // doesn't depend on that field: no real customer message (a typed
-      // reply, a voice note, a photo) is ever completely empty, so
-      // anything this bare has nothing for the assistant to answer.
-      // Left to fall through, this used to reach the customer as "I
-      // can't listen to voice messages or view photos/videos yet" --
-      // nonsensical for someone who just tapped an emoji.
+      // No text and no attachment -- nothing for the assistant to answer.
+      // Left to fall through, this used to reach the customer as "I can't
+      // listen to voice messages or view photos/videos yet" -- nonsensical
+      // for someone who just tapped an emoji reaction.
       return { kind: "unsupported", updateType: "contentless_message" };
+    }
+    if (isBareStoryReaction(event.message)) {
+      // The other shape a Story reaction arrives in: `text` is set, but
+      // it's only the reaction emoji, with `reply_to.story` pointing at
+      // our Story. Confirmed in production -- this reached the model as a
+      // real customer message and got a real (English, off-hours
+      // escalation) reply to a customer who never asked anything. A real
+      // Story *reply* with actual words (see the test for this) still
+      // goes through normally; only a bare emoji reaction is skipped.
+      return { kind: "unsupported", updateType: "story_reaction" };
     }
     return { kind: "message", message: toInboundMessage(event, event.message) };
   }
@@ -140,6 +153,22 @@ function toInboundMessage(event: InstagramMessagingEvent, message: InstagramMess
 
 function isContentless(message: InstagramMessagingMessage): boolean {
   return !message.text && (message.attachments?.length ?? 0) === 0;
+}
+
+/**
+ * Every emoji character, plus the invisible joiners/modifiers that build a
+ * compound one (variation selector, zero-width joiner, skin-tone
+ * modifiers) -- so a multi-codepoint reaction like "❤️" or "👍🏽" still
+ * strips down to nothing.
+ */
+const EMOJI_AND_JOINERS = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu;
+
+function isEmojiOnly(text: string): boolean {
+  return text.trim().length > 0 && text.replace(EMOJI_AND_JOINERS, "").trim().length === 0;
+}
+
+function isBareStoryReaction(message: InstagramMessagingMessage): boolean {
+  return Boolean(message.reply_to?.story) && isEmojiOnly(message.text ?? "");
 }
 
 function detectMediaType(message: InstagramMessagingMessage): InstagramMediaType | null {
