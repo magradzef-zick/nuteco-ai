@@ -4,6 +4,10 @@ import { MessageDebouncer } from "../src/engine/MessageDebouncer";
 import { handleIncomingTelegramUpdate } from "../src/composition";
 import { fakeLogger } from "./support/FakeLogger";
 
+/** A fixed Sunday afternoon in Tashkent -- always outside working hours, so these dispatch-recovery tests exercise the real handleMessages, not the staff-handoff no-op. */
+const OUTSIDE_WORKING_HOURS = new Date("2026-08-09T07:00:00Z").getTime();
+const now = () => OUTSIDE_WORKING_HOURS;
+
 function textUpdate(updateId: number, messageId: number, chatId: number, text: string) {
   return {
     update_id: updateId,
@@ -34,7 +38,7 @@ test("a customer is NOT permanently locked out after handleMessages throws for o
     throw new Error("simulated unexpected failure");
   };
 
-  await handleIncomingTelegramUpdate(textUpdate(1, 100, 555, "first message"), { debouncer, handleMessages, logger });
+  await handleIncomingTelegramUpdate(textUpdate(1, 100, 555, "first message"), { debouncer, handleMessages, now, logger });
 
   // The failure was logged distinctly, not silently swallowed.
   assert.ok(entries.some((e) => e.event === "conversation.unhandled_error" && e.fields.customerId === "telegram:555"));
@@ -42,7 +46,7 @@ test("a customer is NOT permanently locked out after handleMessages throws for o
   // The customer's next message must still be processed normally -- not
   // silently queued forever because the debouncer thinks a batch is still
   // in flight.
-  await handleIncomingTelegramUpdate(textUpdate(2, 101, 555, "second message"), { debouncer, handleMessages, logger });
+  await handleIncomingTelegramUpdate(textUpdate(2, 101, 555, "second message"), { debouncer, handleMessages, now, logger });
 
   assert.deepEqual(
     handledCalls,
@@ -74,6 +78,7 @@ test("a message that queued up while the failing batch was in flight is not left
   const firstUpdatePromise = handleIncomingTelegramUpdate(textUpdate(1, 200, 777, "first"), {
     debouncer,
     handleMessages,
+    now,
     logger,
   });
 
@@ -82,6 +87,7 @@ test("a message that queued up while the failing batch was in flight is not left
   await handleIncomingTelegramUpdate(textUpdate(2, 201, 777, "queued while first was in flight"), {
     debouncer,
     handleMessages,
+    now,
     logger,
   });
 
@@ -94,6 +100,7 @@ test("a message that queued up while the failing batch was in flight is not left
   await handleIncomingTelegramUpdate(textUpdate(3, 202, 777, "third, after recovery"), {
     debouncer,
     handleMessages,
+    now,
     logger,
   });
 

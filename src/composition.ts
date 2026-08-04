@@ -20,6 +20,7 @@ import type { ParsedUpdateResult } from "./adapters/ParsedUpdateResult";
 import { MessageDebouncer, type InboundMessage } from "./engine/MessageDebouncer";
 import { createConversationEngine } from "./engine/ConversationEngine";
 import { createInstagramRedirectHandler, type MessageHandler } from "./engine/instagramRedirectHandler";
+import { isWithinWorkingHours } from "./engine/businessHours";
 import { GeminiProvider } from "./llm/gemini/GeminiProvider";
 import type { LlmProvider } from "./llm/LlmProvider";
 import { loadKnowledgeBase } from "./knowledge/loader";
@@ -55,6 +56,14 @@ export interface AppDependencies {
    * pending.
    */
   instagramHandleMessages: MessageHandler | null;
+  /**
+   * Single shared clock, injected rather than every caller reaching for
+   * `Date.now()` directly -- lets a test freeze "now" to a specific moment
+   * (e.g. a Friday at 11:00 Tashkent time) when deciding whether a Telegram
+   * message currently belongs to staff or to the AI agent. See
+   * businessHours.ts.
+   */
+  now: () => number;
   logger: Logger;
   /** Exposed only for the startup database-connectivity check (src/startup/validateStartup.ts's databaseCheck) -- business logic should go through identityRepository/conversationStateRepository instead. */
   db: Database;
@@ -87,6 +96,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
   const conversationStateRepository = new SqliteConversationStateRepository(db);
   const debouncer = new MessageDebouncer({ persistedStore: new SqliteProcessedMessageStore(db) });
   const llmProvider = new GeminiProvider({ apiKey: config.geminiApiKey, model: config.geminiModel, logger });
+  const now = () => Date.now();
 
   // Computed once, shared by both handlers below -- there is only ever one
   // manager notification chat configured, and both the full engine's
@@ -100,7 +110,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     conversationStateRepository,
     getSystemPromptText: () => loadSystemPrompt(config.promptsDir),
     getKnowledgeBaseText: () => loadKnowledgeBase({ knowledgeDir: config.knowledgeBaseDir }),
-    now: () => Date.now(),
+    now,
     logger,
     // Telegram-specific formatting decision (the "telegram:" prefix) made
     // here, the one place this project's concrete platform choices are
@@ -124,6 +134,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     llmProvider,
     handleMessages,
     instagramHandleMessages,
+    now,
     logger,
     db,
     close: () => db.close(),
@@ -180,12 +191,36 @@ async function handleParsedUpdate(
   await drainBatches(parsed.message.customerId, admitResult.batch, handleMessages, deps);
 }
 
+/**
+ * During Nuteco's working hours (Mon-Fri, 10:00-18:00 Tashkent time --
+ * see businessHours.ts), staff answer Telegram themselves; the AI agent
+ * deliberately does nothing so it can't talk over a human who's already
+ * there. Outside those hours it's the reverse -- nobody's watching, so
+ * the agent takes over exactly as it always has. This decision is made
+ * fresh on every update (not cached), since the process runs for days
+ * and the correct answer changes by the hour.
+ *
+ * No customer-facing side effect at all -- no reply, no typing indicator,
+ * no identity/state write -- deliberately: this hands the conversation to
+ * staff exactly as if the bot weren't there, rather than injecting a
+ * message that could talk over what a human is about to type in the same
+ * thread. Still logged, so "the agent did nothing here" is a visible,
+ * intentional fact in production logs rather than indistinguishable from
+ * a silent failure.
+ */
+function createTelegramStaffHandoffHandler(logger: Logger): MessageHandler {
+  return async function handOffToStaff(customerId, messages) {
+    logger.info("telegram.deferred_to_staff", { customerId, messageCount: messages.length });
+  };
+}
+
 /** Parses a raw Telegram update and runs it through the shared platform-agnostic core above. This is the function the Telegram webhook handler's `onUpdate` callback points at. */
 export async function handleIncomingTelegramUpdate(
   rawUpdate: unknown,
-  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "now" | "logger">
 ): Promise<void> {
-  await handleParsedUpdate(parseUpdate(rawUpdate), deps.handleMessages, deps);
+  const handler = isWithinWorkingHours(deps.now()) ? createTelegramStaffHandoffHandler(deps.logger) : deps.handleMessages;
+  await handleParsedUpdate(parseUpdate(rawUpdate), handler, deps);
 }
 
 /**

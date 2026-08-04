@@ -17,6 +17,11 @@ const TEST_SYSTEM_PROMPT = "You are the test assistant.";
 const TEST_KNOWLEDGE_BASE = "Almond flour costs 150.000 per kg.";
 const TEST_LLM_REPLY = "Thanks for your message -- a team member will follow up soon.";
 
+/** A fixed Sunday afternoon in Tashkent -- always outside working hours, so every existing test in this file (written before staff hours existed) keeps exercising the real AI engine unless a test deliberately overrides `now`. */
+const OUTSIDE_WORKING_HOURS = new Date("2026-08-09T07:00:00Z").getTime();
+/** A fixed Monday at 11:00 Tashkent time -- always within working hours. */
+const WITHIN_WORKING_HOURS = new Date("2026-08-03T06:00:00Z").getTime();
+
 /**
  * Full-pipeline integration tests: a real local HTTP server hosting the
  * real webhook handler, receiving real HTTP POST requests (via fetch)
@@ -26,7 +31,7 @@ const TEST_LLM_REPLY = "Thanks for your message -- a team member will follow up 
  * API and the LLM provider faked, via FakeTelegramTransport and
  * FakeLlmProvider.
  */
-function setupServer(options: { secretToken?: string } = {}) {
+function setupServer(options: { secretToken?: string; now?: () => number } = {}) {
   const transport = new FakeTelegramTransport();
   const messageSender = new TelegramMessageSender({ transport, sleep: async () => {} });
   const identityRepository = new InMemoryCustomerIdentityRepository();
@@ -34,6 +39,7 @@ function setupServer(options: { secretToken?: string } = {}) {
   const debouncer = new MessageDebouncer();
   const llmProvider = new FakeLlmProvider([TEST_LLM_REPLY]);
   const { logger, entries: logEntries } = fakeLogger();
+  const now = options.now ?? (() => OUTSIDE_WORKING_HOURS);
   const handleMessages = createConversationEngine({
     llmProvider,
     messageSender,
@@ -48,7 +54,7 @@ function setupServer(options: { secretToken?: string } = {}) {
 
   const webhookHandler = createTelegramWebhookHandler({
     secretToken: options.secretToken ?? null,
-    onUpdate: (update) => handleIncomingTelegramUpdate(update, { debouncer, handleMessages, logger }),
+    onUpdate: (update) => handleIncomingTelegramUpdate(update, { debouncer, handleMessages, now, logger }),
     logger,
   });
 
@@ -304,4 +310,81 @@ test("a request body over the size limit is rejected with 413, not buffered inde
   } finally {
     await closeServer(server);
   }
+});
+
+test("during working hours, a Telegram message gets no reply at all -- staff, not the AI, are expected to answer", async () => {
+  const { server, transport, logEntries } = setupServer({ now: () => WITHIN_WORKING_HOURS });
+  const baseUrl = await listen(server);
+
+  try {
+    const { body } = telegramTextUpdate(1, 300, 111, "Здравствуйте, а миндальная мука есть?");
+    const response = await post(baseUrl, "/telegram/webhook", body);
+    assert.equal(response.status, 200, "the webhook must still ack -- Telegram must not see this as a delivery failure");
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(transport.calls.length, 0, "no reply, no typing indicator -- the agent must not talk over staff");
+    assertNoUnexpectedProcessingErrors(logEntries);
+    assert.ok(logEntries.some((e) => e.event === "telegram.deferred_to_staff" && e.fields.customerId === "telegram:111"));
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("outside working hours, the AI agent answers normally, exactly as before staff hours existed", async () => {
+  const { server, transport } = setupServer({ now: () => OUTSIDE_WORKING_HOURS });
+  const baseUrl = await listen(server);
+
+  try {
+    const { body } = telegramTextUpdate(2, 301, 222, "Здравствуйте, а миндальная мука есть?");
+    const response = await post(baseUrl, "/telegram/webhook", body);
+    assert.equal(response.status, 200);
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(transport.calls.map((c) => c.method), ["sendChatAction", "sendMessage"]);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("the same customer gets the AI's reply once working hours end, with no special-casing needed", async () => {
+  // A single MessageDebouncer instance shared across both calls, driven
+  // by a `now` that flips from within to outside hours between them --
+  // proving the decision is made fresh per update, not cached once at
+  // startup or per customer.
+  const transport = new FakeTelegramTransport();
+  const messageSender = new TelegramMessageSender({ transport, sleep: async () => {} });
+  const debouncer = new MessageDebouncer();
+  const llmProvider = new FakeLlmProvider([TEST_LLM_REPLY]);
+  const { logger } = fakeLogger();
+  const handleMessages = createConversationEngine({
+    llmProvider,
+    messageSender,
+    identityRepository: new InMemoryCustomerIdentityRepository(),
+    conversationStateRepository: new InMemoryConversationStateRepository(),
+    getSystemPromptText: () => TEST_SYSTEM_PROMPT,
+    getKnowledgeBaseText: () => TEST_KNOWLEDGE_BASE,
+    now: () => 1_700_000_000_000,
+    logger,
+    managerNotificationRecipientId: "telegram:999999999",
+  });
+
+  let currentTime = WITHIN_WORKING_HOURS;
+  await handleIncomingTelegramUpdate(telegramTextUpdate(1, 400, 333, "During hours").body, {
+    debouncer,
+    handleMessages,
+    now: () => currentTime,
+    logger,
+  });
+  assert.equal(transport.calls.length, 0, "still within hours -- staff handle it, not the agent");
+
+  currentTime = OUTSIDE_WORKING_HOURS;
+  await handleIncomingTelegramUpdate(telegramTextUpdate(2, 401, 333, "After hours").body, {
+    debouncer,
+    handleMessages,
+    now: () => currentTime,
+    logger,
+  });
+  assert.ok(transport.calls.some((c) => c.method === "sendMessage"), "the same customer's later message, now after hours, reaches the agent");
 });
