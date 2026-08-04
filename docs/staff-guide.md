@@ -11,6 +11,15 @@ A helper that answers simple, repeated customer questions (prices, delivery, wha
 - It never finalizes an order, confirms a payment, or gives a discount. That's still always you.
 - It never handles a complaint, a return, a wholesale order, or anything involving money already sent — those always come straight to you.
 
+## Telegram vs Instagram — this is on purpose
+
+On Telegram, the assistant actually answers questions the way described
+below. On Instagram, right now, every message gets one fixed reply pointing
+the customer to Telegram (call, message, or a one-click order link) instead
+of an answer — this is intentional, at sales's own request, while
+Instagram's own access with Meta is still pending. If a customer on
+Instagram doesn't get a real answer, that is expected, not a malfunction.
+
 ## What you'll see
 
 When the assistant hands you a conversation, you'll get a short message summarizing what the customer wants and why it needs you. **Just reply to the customer normally, the way you always have.** The assistant will not reply again in that conversation while you're handling it.

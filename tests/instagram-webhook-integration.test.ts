@@ -5,18 +5,12 @@ import { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
 import { createInstagramWebhookHandler } from "../src/adapters/instagram/webhookRouter";
 import { MessageDebouncer } from "../src/engine/MessageDebouncer";
-import { InMemoryCustomerIdentityRepository } from "../src/storage/memory/InMemoryCustomerIdentityRepository";
-import { InMemoryConversationStateRepository } from "../src/storage/memory/InMemoryConversationStateRepository";
-import { createConversationEngine } from "../src/engine/ConversationEngine";
+import { createInstagramRedirectHandler } from "../src/engine/instagramRedirectHandler";
 import { InstagramMessageSender } from "../src/adapters/instagram/InstagramMessageSender";
 import { FakeInstagramTransport } from "./support/FakeInstagramTransport";
-import { FakeLlmProvider } from "./support/FakeLlmProvider";
 import { fakeLogger } from "./support/FakeLogger";
 import { handleIncomingInstagramUpdate } from "../src/composition";
 
-const TEST_SYSTEM_PROMPT = "You are the test assistant.";
-const TEST_KNOWLEDGE_BASE = "Almond flour costs 150.000 per kg.";
-const TEST_LLM_REPLY = "Thanks for your message -- a team member will follow up soon.";
 const TEST_APP_SECRET = "test-app-secret";
 
 /**
@@ -24,41 +18,29 @@ const TEST_APP_SECRET = "test-app-secret";
  * HTTP server hosting the real webhook handler, receiving real HTTP
  * requests (via fetch) shaped like Meta's Instagram messaging webhook
  * deliveries, flowing through the real parser, the real debouncer, and
- * the real ConversationEngine (with a real in-memory identity/state
- * repository) -- with only the Graph API and the LLM provider faked, via
- * FakeInstagramTransport and FakeLlmProvider. Mirrors
- * telegram-webhook-integration.test.ts's structure exactly.
+ * the real redirect-to-Telegram handler (see instagramRedirectHandler.ts)
+ * -- with only the Graph API faked, via FakeInstagramTransport. Mirrors
+ * telegram-webhook-integration.test.ts's structure exactly, except
+ * Telegram still goes through the full ConversationEngine and Instagram
+ * doesn't -- see composition.ts's AppDependencies doc comment for why.
  */
 function setupServer(options: { appSecret?: string | null; verifyToken?: string } = {}) {
   const transport = new FakeInstagramTransport();
   const messageSender = new InstagramMessageSender({ transport, sleep: async () => {} });
-  const identityRepository = new InMemoryCustomerIdentityRepository();
-  const conversationStateRepository = new InMemoryConversationStateRepository();
   const debouncer = new MessageDebouncer();
-  const llmProvider = new FakeLlmProvider([TEST_LLM_REPLY]);
   const { logger, entries: logEntries } = fakeLogger();
-  const handleMessages = createConversationEngine({
-    llmProvider,
-    messageSender,
-    identityRepository,
-    conversationStateRepository,
-    getSystemPromptText: () => TEST_SYSTEM_PROMPT,
-    getKnowledgeBaseText: () => TEST_KNOWLEDGE_BASE,
-    now: () => 1_700_000_000_000,
-    logger,
-    managerNotificationRecipientId: "telegram:999999999",
-  });
+  const instagramHandleMessages = createInstagramRedirectHandler({ messageSender, logger });
 
   const webhookHandler = createInstagramWebhookHandler({
     verifyToken: options.verifyToken ?? "test-verify-token",
     appSecret: options.appSecret === undefined ? TEST_APP_SECRET : options.appSecret,
-    onEvent: (event) => handleIncomingInstagramUpdate(event, { debouncer, handleMessages, logger }),
+    onEvent: (event) => handleIncomingInstagramUpdate(event, { debouncer, instagramHandleMessages, logger }),
     logger,
   });
 
   const server = createServer(webhookHandler);
 
-  return { server, transport, identityRepository, logEntries };
+  return { server, transport, logEntries };
 }
 
 /** Fails the test loudly if anything logged an unexpected processing error. Mirrors telegram-webhook-integration.test.ts's assertNoUnexpectedProcessingErrors. */
@@ -113,8 +95,8 @@ async function post(baseUrl: string, path: string, body: unknown, appSecret: str
   return fetch(`${baseUrl}${path}`, { method: "POST", headers, body: serialized });
 }
 
-test("a real text message flows end-to-end: 200 ack, identity recorded, typing + reply sent", async () => {
-  const { server, transport, identityRepository, logEntries } = setupServer();
+test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply sent, no LLM/identity involved", async () => {
+  const { server, transport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -124,14 +106,11 @@ test("a real text message flows end-to-end: 200 ack, identity recorded, typing +
 
     await new Promise((resolve) => setImmediate(resolve));
 
-    const identity = await identityRepository.findById("instagram:555555555555555");
-    assert.ok(identity, "the customer's contact should have been recorded");
-
-    assert.deepEqual(
-      transport.calls.map((c) => c.method),
-      ["sendSenderAction", "sendMessage"],
-      "should show typing, then send exactly one reply"
-    );
+    // No typing indicator: this is a fixed template, not a generated
+    // reply, so there's nothing to show "thinking" for.
+    assert.deepEqual(transport.calls.map((c) => c.method), ["sendMessage"], "should send exactly one reply, no typing indicator");
+    const sent = transport.calls.find((c) => c.method === "sendMessage");
+    assert.ok(sent && sent.method === "sendMessage" && sent.text.includes("t.me/NutecoPremium"), "reply should be the Telegram redirect template");
 
     assertNoUnexpectedProcessingErrors(logEntries);
     assert.ok(logEntries.some((e) => e.event === "webhook.received"));

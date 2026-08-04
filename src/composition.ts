@@ -19,6 +19,7 @@ import type { MessageSender } from "./adapters/MessageSender";
 import type { ParsedUpdateResult } from "./adapters/ParsedUpdateResult";
 import { MessageDebouncer, type InboundMessage } from "./engine/MessageDebouncer";
 import { createConversationEngine } from "./engine/ConversationEngine";
+import { createInstagramRedirectHandler, type MessageHandler } from "./engine/instagramRedirectHandler";
 import { GeminiProvider } from "./llm/gemini/GeminiProvider";
 import type { LlmProvider } from "./llm/LlmProvider";
 import { loadKnowledgeBase } from "./knowledge/loader";
@@ -44,7 +45,16 @@ export interface AppDependencies {
   debouncer: MessageDebouncer;
   /** Currently GeminiProvider -- everything upstream of this depends only on LlmProvider, so swapping models means changing this one field's construction below, not anything else in the file. */
   llmProvider: LlmProvider;
-  handleMessages: (customerId: string, messages: InboundMessage[]) => Promise<void>;
+  handleMessages: MessageHandler;
+  /**
+   * Present only when INSTAGRAM_* config is set. Deliberately NOT the same
+   * function as `handleMessages` -- see instagramRedirectHandler.ts:
+   * Instagram gets a fixed redirect-to-Telegram template for every
+   * message, not the full conversation engine, per an explicit
+   * sales-team request tied to Instagram's own App Review still being
+   * pending.
+   */
+  instagramHandleMessages: MessageHandler | null;
   logger: Logger;
   /** Exposed only for the startup database-connectivity check (src/startup/validateStartup.ts's databaseCheck) -- business logic should go through identityRepository/conversationStateRepository instead. */
   db: Database;
@@ -97,6 +107,10 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     managerNotificationRecipientId: `telegram:${config.managerNotificationChatId}`,
   });
 
+  const instagramHandleMessages = config.instagram
+    ? createInstagramRedirectHandler({ messageSender, logger })
+    : null;
+
   return {
     config,
     transport,
@@ -107,6 +121,7 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     debouncer,
     llmProvider,
     handleMessages,
+    instagramHandleMessages,
     logger,
     db,
     close: () => db.close(),
@@ -134,7 +149,8 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
  */
 async function handleParsedUpdate(
   parsed: ParsedUpdateResult,
-  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+  handleMessages: MessageHandler,
+  deps: Pick<AppDependencies, "debouncer" | "logger">
 ): Promise<void> {
   if (parsed.kind === "unsupported") {
     deps.logger.info("webhook.update_unsupported", { updateType: parsed.updateType });
@@ -159,7 +175,7 @@ async function handleParsedUpdate(
     return;
   }
 
-  await drainBatches(parsed.message.customerId, admitResult.batch, deps);
+  await drainBatches(parsed.message.customerId, admitResult.batch, handleMessages, deps);
 }
 
 /** Parses a raw Telegram update and runs it through the shared platform-agnostic core above. This is the function the Telegram webhook handler's `onUpdate` callback points at. */
@@ -167,7 +183,7 @@ export async function handleIncomingTelegramUpdate(
   rawUpdate: unknown,
   deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
 ): Promise<void> {
-  await handleParsedUpdate(parseUpdate(rawUpdate), deps);
+  await handleParsedUpdate(parseUpdate(rawUpdate), deps.handleMessages, deps);
 }
 
 /**
@@ -180,13 +196,26 @@ export async function handleIncomingTelegramUpdate(
  * parseWebhookEvent.ts's doc comment. Each is processed sequentially, not
  * in parallel, so behavior stays as deterministic and easy to reason
  * about as the Telegram path.
+ *
+ * Uses `deps.instagramHandleMessages` -- the redirect-to-Telegram
+ * template, not the full conversation engine -- never `deps.handleMessages`
+ * (that one's for Telegram). Only reachable at all when Instagram is
+ * configured (src/index.ts gates the whole route on `config.instagram`),
+ * so a null handler here means the composition root wired something
+ * wrong, not a normal runtime condition -- fail loudly, not silently.
  */
 export async function handleIncomingInstagramUpdate(
   rawEvent: unknown,
-  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+  deps: Pick<AppDependencies, "debouncer" | "instagramHandleMessages" | "logger">
 ): Promise<void> {
+  if (!deps.instagramHandleMessages) {
+    throw new Error(
+      "handleIncomingInstagramUpdate was called but no instagramHandleMessages is wired -- this route should " +
+        "never be reachable unless INSTAGRAM_* config is set, which is also what builds this handler."
+    );
+  }
   for (const parsed of parseInstagramWebhookEvent(rawEvent)) {
-    await handleParsedUpdate(parsed, deps);
+    await handleParsedUpdate(parsed, deps.instagramHandleMessages, deps);
   }
 }
 
@@ -208,7 +237,8 @@ export async function handleIncomingInstagramUpdate(
 async function drainBatches(
   customerId: string,
   firstBatch: InboundMessage[],
-  deps: Pick<AppDependencies, "debouncer" | "handleMessages" | "logger">
+  handleMessages: MessageHandler,
+  deps: Pick<AppDependencies, "debouncer" | "logger">
 ): Promise<void> {
   let batch: InboundMessage[] | null = firstBatch;
   let isFirstBatch = true;
@@ -221,7 +251,7 @@ async function drainBatches(
 
     const currentBatch = batch;
     try {
-      await deps.handleMessages(customerId, currentBatch);
+      await handleMessages(customerId, currentBatch);
       batch = deps.debouncer.complete(
         customerId,
         currentBatch.map((message) => message.messageId)
