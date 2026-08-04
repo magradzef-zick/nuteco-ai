@@ -1,12 +1,12 @@
 # Nuteco AI Assistant
 
-A customer-service assistant for Nuteco Premium, a nut butter and nut flour producer based in Tashkent, Uzbekistan. It answers product, delivery, and payment questions over Telegram and Instagram Direct Messages from a maintained knowledge base, collects order details, and hands off anything sensitive — complaints, wholesale orders, discount requests, medical questions — to a human.
+A customer-service assistant for Nuteco Premium, a nut butter and nut flour producer based in Tashkent, Uzbekistan. On Telegram, it answers product, delivery, and payment questions from a maintained knowledge base, collects order details, and hands off anything sensitive — complaints, wholesale orders, discount requests, medical questions — to a human. On Instagram, every message gets a fixed reply redirecting the customer to Telegram instead (see Architecture) — a deliberate, client-requested choice, not a limitation of the underlying engine.
 
 The assistant is not meant to replace staff. It absorbs the repetitive front-line questions and leaves everything that requires judgment, money, or an apology to a person.
 
 ## Features
 
-- **Telegram and Instagram webhook integration** — small, framework-free HTTP handlers that acknowledge the platform immediately and process updates asynchronously, so slow processing never causes a delivery retry. Both run on the same process and share the same conversation engine; Instagram support is entirely optional and off by default (see Environment variables).
+- **Telegram and Instagram webhook integration** — small, framework-free HTTP handlers that acknowledge the platform immediately and process updates asynchronously, so slow processing never causes a delivery retry. Both run on the same process and share the same debounce/dedup core, but not the same reply logic: Telegram goes through the full conversation engine, Instagram gets a fixed redirect-to-Telegram template for every message (see `src/engine/instagramRedirectHandler.ts`) — client-requested, since Instagram can't yet serve customers outside the app's own roles until Meta's App Review completes. Instagram support is entirely optional and off by default (see Environment variables).
 - **Knowledge-base-grounded replies** — the assistant only answers from a set of per-topic markdown files, injected directly into the model's context. Editing a file changes what the assistant knows within about a minute, with no redeploy.
 - **Deterministic hallucination guardrail** — every reply is checked after generation: any price, percentage, or quantity that isn't actually backed by the knowledge base blocks the reply and triggers an escalation instead. Amounts are compared by digits, so a reformatted figure (`25 000` for the price list's `25.000`) is still checked rather than slipping past unrecognized.
 - **Price-catalogue check** — the client's price list is parsed back out of the same text the model was given, and every price the assistant states is held to the exact product row and size column it claims. A real catalogue price attached to the wrong product, or a 1 kg price quoted for a 500 g jar, is caught — "the number exists somewhere" is not enough once a full price list is in the knowledge base.
@@ -21,16 +21,15 @@ The assistant is not meant to replace staff. It absorbs the repetitive front-lin
 The codebase follows a straightforward dependency-inversion layout: the conversation engine depends only on interfaces, and `composition.ts` is the single place concrete implementations are chosen and wired together.
 
 ```
-Telegram webhook  → parseUpdate          ─┐
-                                           ├→ MessageDebouncer → ConversationEngine → PlatformRoutingMessageSender ─┬→ Telegram
-Instagram webhook → parseWebhookEvent    ─┘                          │                                            └→ Instagram
-                                                                      │
-                                                    ┌─────────────────┼─────────────────┐
-                                                    │                 │                 │
-                                             LlmProvider      CustomerIdentity   ConversationState
-                                             (Gemini)           Repository          Repository
-                                                                (SQLite)             (SQLite)
+Telegram webhook  → parseUpdate        ─┐
+                                         ├→ MessageDebouncer ─→ per-platform handler ─→ PlatformRoutingMessageSender ─┬→ Telegram
+Instagram webhook → parseWebhookEvent  ─┘                                                                             └→ Instagram
+
+Telegram's handler:   ConversationEngine ── LlmProvider (Gemini) · CustomerIdentityRepository · ConversationStateRepository (all SQLite)
+Instagram's handler:  instagramRedirectHandler — a fixed template, no LLM, no repositories
 ```
+
+Both platforms share the debounce/dedup core, but not the reply logic past that point: Telegram's messages go on to the full `ConversationEngine`; Instagram's go to `instagramRedirectHandler` instead — a fixed, client-requested reply, not the AI (see the Features section above for why).
 
 - `src/adapters/` — platform-specific code, one subdirectory per platform (`telegram/`, `instagram/`). Each converts its platform's payloads into a normalized shape the engine understands; nothing above this layer knows Telegram or Instagram exist. `PlatformRoutingMessageSender` dispatches an outgoing reply to the right platform based on the `<platform>:<id>` prefix every `customerId` already carries — adding a platform means registering one more entry here, not touching the engine.
 - `src/engine/` — the conversation engine itself, plus the pieces around it: message debouncing, language detection, the B2B pre-filter, the hallucination guardrail, and fallback messages. Platform-agnostic — it depends only on the `MessageSender` interface, never on a concrete platform.
@@ -38,7 +37,7 @@ Instagram webhook → parseWebhookEvent    ─┘                          │  
 - `src/storage/` — `CustomerIdentityRepository` (long-lived: is this a returning customer, are they B2B) and `ConversationStateRepository` (short-lived per-conversation state). Each has a SQLite implementation and an in-memory one used in tests.
 - `src/knowledge/` and `src/prompts/` — load markdown files from disk into the text sent to the model, with a short cache so a burst of messages doesn't hit the filesystem repeatedly.
 - `src/startup/` — checks that everything the app depends on actually works before it starts accepting traffic.
-- `src/composition.ts` — the composition root. Its `handleParsedUpdate` function is the platform-agnostic core (debounce, dispatch, error recovery) shared by both webhook entrypoints, so that logic exists exactly once regardless of how many platforms are wired up.
+- `src/composition.ts` — the composition root. Its `handleParsedUpdate` function is the platform-agnostic core (debounce, dispatch, error recovery) shared by both webhook entrypoints, so that logic exists exactly once regardless of how many platforms are wired up or what each one's actual message handler does past that point.
 
 Instagram support is additive and optional: with no `INSTAGRAM_*` variables set, the app behaves exactly as a Telegram-only deployment always has (no second route, no extra startup check, no behavior change).
 
