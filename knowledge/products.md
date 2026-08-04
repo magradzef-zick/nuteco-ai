@@ -1,6 +1,6 @@
 # Nuteco Premium — Products
 
-**Prices and sizes do not live in this file.** The client's official price list is [`prices.md`](prices.md) and it is the only source of prices, sizes, and "is this in the assortment at all". This file covers everything else about the products — composition, variants, shelf life, and what Nuteco does not sell. Where the two disagree about a size or a product name, `prices.md` wins.
+**Prices and sizes do not live in this file.** The client's official price list is [`prices.md`](prices.md) and it is the only source of prices, sizes, and "is this in the assortment at all". **Exact per-product ingredient lists don't live here either** — that's [`composition.md`](composition.md), the client's official composition data, quoted verbatim per product. This file covers everything else about the products — variants, shelf life, and what Nuteco does not sell. Where these files disagree about a size, product name, or ingredient, the dedicated file (`prices.md` / `composition.md`) wins over this one.
 
 ## Product catalog (background, per real order history)
 
@@ -13,8 +13,8 @@
 | Hazelnut paste / flour (фундучная паста / мука) | Paste comes with honey and without — separate price-list lines | |
 | Cashew paste (паста из кешью) | — | |
 | Peanut paste (арахисовая паста) | With honey / without honey / with peanut pieces (always confirm which) | The Jerry's line is a separate premium range with its own sizes |
-| Walnut paste (паста из грецкого ореха) | With honey and without — both in the price list | |
-| "Nut mix" paste (ореховая паста mix) | Almond, peanut, honey, seeds, cinnamon | A distinct blended product, not a single-nut paste. `[NEEDS CLIENT CONFIRMATION whether the price list's "Ореховая паста с мёдом" line is this mix — do not assert they are the same product.]` |
+| Walnut paste (паста из грецкого ореха) | With honey and without — both in the price list | The honey variant's composition is incomplete in the client's data — see `composition.md`, escalate composition questions for that specific line |
+| "Nut mix" paste (ореховая паста mix) | Almond, peanut, honey, sunflower seeds, cinnamon, sunflower oil | Confirmed via `composition.md`: this is the price list's "Ореховая паста с мёдом" line — its exact composition matches this mix, not a single-nut paste. |
 | Sesame/tahini paste (кунжутная паста / тахини) | Consistency varies by fat content and grind (70 micron = thinner) | |
 | Chia seeds (семена чиа) | Sourced from Paraguay per staff description | |
 | Psyllium (псиллиум) | — | Vegan egg substitute, gel-forming fiber |
@@ -40,10 +40,12 @@ See [`future_products.md`](future_products.md) for marzipan and praline status �
 - Never state a bulk/wholesale discount tier — escalate bulk-pricing requests.
 - Pistachio-family products (paste, flour, crumb) have historically been the most price-volatile line, driven by harvest quality — worth re-checking with the client more often than the rest.
 
-## Composition & ingredient answers safe to give directly
+## Composition & ingredient answers
 
-- Peanut paste: ground peanut only, no thickeners/emulsifiers/other additives (honey optional, always ask).
-- "Nut mix" paste: almond, peanut, honey, seeds, cinnamon.
+**Exact per-product ingredient lists live in [`composition.md`](composition.md), not here.** Quote from that file cell by cell, same discipline as prices — never state a composition from memory, from a similar product, or by guessing what's "typical" for that kind of paste.
+
+What stays here — facts about ingredients that aren't themselves a per-product composition list:
+
 - Honey used: natural flower honey, described as certified.
 - Psyllium: absorbs water, forms a gel; vegan egg substitute (1 part psyllium : 3 parts water ≈ 1 egg); botanically plantain seed husk.
 - Pistachio paste taste note (safe to share if asked): no honey, distinctive slightly tart/rich flavor, not universally loved eaten plain but commonly used as a baking/dessert ingredient.
