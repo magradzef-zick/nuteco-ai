@@ -3,10 +3,44 @@ import { createLogger, type Logger } from "../../observability/logger";
 import type { LlmProvider, LlmReplyRequest, LlmReplyResult } from "../LlmProvider";
 
 /**
- * Gemini's error envelope on a non-2xx response: { error: { code, message, status } }.
+ * Gemini's error envelope on a non-2xx response: { error: { code, message,
+ * status, details } }. On a 429, `details` carries a RetryInfo entry with
+ * exactly how long Gemini wants us to wait -- e.g. `retryDelay: "27s"`.
  */
 interface GeminiErrorBody {
-  error?: { code?: number; message?: string; status?: string };
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+    details?: Array<{ "@type"?: string; retryDelay?: string }>;
+  };
+}
+
+const RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+
+/**
+ * A cap on how long a single retry wait is ever allowed to be, regardless
+ * of what Gemini's RetryInfo says -- a defensive bound against a malformed
+ * or unusually large value turning one customer's turn into a multi-minute
+ * hang. Every real value observed in production has been under a minute
+ * (free-tier quota windows reset quickly); this is headroom, not a tuned
+ * expectation.
+ */
+const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Extracts Gemini's own suggested wait from a 429's RetryInfo, instead of
+ * guessing with generic exponential backoff. Without this, the retry logic
+ * waited ~500ms-1s total while Gemini's free-tier rate limit needed 15-50s
+ * to clear -- every retry was doomed before it started, and real customer
+ * questions (confirmed in production logs) fell through to "не получилось
+ * ответить" for no reason a longer wait couldn't have fixed.
+ */
+function parseRetryDelayMs(errorBody: GeminiErrorBody): number | undefined {
+  const retryInfo = errorBody.error?.details?.find((detail) => detail["@type"] === RETRY_INFO_TYPE);
+  const match = retryInfo?.retryDelay?.match(/^(\d+(?:\.\d+)?)s$/);
+  if (!match) return undefined;
+  return Math.min(Number(match[1]) * 1000, MAX_RETRY_DELAY_MS);
 }
 
 interface GeminiGenerateContentBody {
@@ -212,10 +246,11 @@ export class GeminiProvider implements LlmProvider {
     const statusCode = errorBody.error?.code ?? response.status;
     const error = new GeminiApiError(buildApiErrorMessage(method, statusCode, errorBody.error?.message), statusCode);
     const retryable = isRetryableGeminiError(statusCode);
+    const retryAfterMs = parseRetryDelayMs(errorBody);
 
-    this.logger.error("gemini_api.error", { method, statusCode, retryable, error: error.message });
+    this.logger.error("gemini_api.error", { method, statusCode, retryable, retryAfterMs, error: error.message });
 
-    return { outcome: "failure", failure: { error, retryable } };
+    return { outcome: "failure", failure: { error, retryable, retryAfterMs } };
   }
 }
 

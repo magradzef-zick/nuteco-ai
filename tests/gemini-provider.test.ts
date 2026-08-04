@@ -41,8 +41,19 @@ function truncatedGenerateResponse(partialText: string): Response {
   );
 }
 
-function errorResponse(statusCode: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { code: statusCode, message, status: "ERROR" } }), { status: statusCode });
+function errorResponse(statusCode: number, message: string, details?: unknown[]): Response {
+  return new Response(
+    JSON.stringify({ error: { code: statusCode, message, status: "ERROR", details } }),
+    { status: statusCode }
+  );
+}
+
+/** Gemini's real shape for "wait this long before retrying" on a 429. */
+function quotaExceededResponse(retryDelay: string): Response {
+  return errorResponse(429, "You exceeded your current quota, please check your plan and billing details.", [
+    { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [] },
+    { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay },
+  ]);
 }
 
 function recordingSleep(): { sleep: (ms: number) => Promise<void>; delays: number[] } {
@@ -119,6 +130,47 @@ test("retries a 429 and eventually succeeds", async () => {
   assert.equal(result.text, "ok");
   assert.equal(requests.length, 2);
   assert.equal(delays.length, 1);
+});
+
+test("honors Gemini's own RetryInfo delay on a quota-exceeded 429 instead of the generic backoff (real production case: a customer's question failed because the previous exponential backoff -- under 1.5s total -- never came close to the 15-50s Gemini actually asks for)", async () => {
+  const { sleep, delays } = recordingSleep();
+  const { fetchImpl } = fakeFetch([quotaExceededResponse("27s"), okGenerateResponse("ok")]);
+  const provider = new GeminiProvider({ apiKey: "FAKE_KEY", model: "gemini-2.5-flash", fetchImpl, sleep, maxAttempts: 3 });
+
+  const result = await provider.generateReply({ systemPrompt: "sp", historyTurns: [], newUserMessage: "hi" });
+
+  assert.equal(result.text, "ok");
+  assert.deepEqual(delays, [27_000]);
+});
+
+test("a fractional RetryInfo delay is honored precisely, not rounded", async () => {
+  const { sleep, delays } = recordingSleep();
+  const { fetchImpl } = fakeFetch([quotaExceededResponse("1.5s"), okGenerateResponse("ok")]);
+  const provider = new GeminiProvider({ apiKey: "FAKE_KEY", model: "gemini-2.5-flash", fetchImpl, sleep, maxAttempts: 3 });
+
+  await provider.generateReply({ systemPrompt: "sp", historyTurns: [], newUserMessage: "hi" });
+
+  assert.deepEqual(delays, [1_500]);
+});
+
+test("an implausibly large RetryInfo delay is capped rather than honored outright", async () => {
+  const { sleep, delays } = recordingSleep();
+  const { fetchImpl } = fakeFetch([quotaExceededResponse("900s"), okGenerateResponse("ok")]);
+  const provider = new GeminiProvider({ apiKey: "FAKE_KEY", model: "gemini-2.5-flash", fetchImpl, sleep, maxAttempts: 3 });
+
+  await provider.generateReply({ systemPrompt: "sp", historyTurns: [], newUserMessage: "hi" });
+
+  assert.deepEqual(delays, [60_000]);
+});
+
+test("a 429 with no RetryInfo (a different rate-limit shape) falls back to the generic exponential backoff", async () => {
+  const { sleep, delays } = recordingSleep();
+  const { fetchImpl } = fakeFetch([errorResponse(429, "Too many requests"), okGenerateResponse("ok")]);
+  const provider = new GeminiProvider({ apiKey: "FAKE_KEY", model: "gemini-2.5-flash", fetchImpl, sleep, maxAttempts: 3, baseDelayMs: 500 });
+
+  await provider.generateReply({ systemPrompt: "sp", historyTurns: [], newUserMessage: "hi" });
+
+  assert.deepEqual(delays, [500]);
 });
 
 test("does not retry a 400 (bad request) -- fails immediately", async () => {
