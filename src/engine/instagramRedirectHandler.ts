@@ -58,10 +58,47 @@ https://t.me/NutecoPremium`,
 export interface InstagramRedirectHandlerDependencies {
   messageSender: MessageSender;
   logger: Logger;
+  /**
+   * Same recipient ConversationEngine already escalates to (the client's
+   * one configured manager chat, `telegram:<MANAGER_NOTIFICATION_CHAT_ID>`)
+   * -- reused, not a second, separately-maintained ID, per the client's
+   * explicit confirmation that this is the same chat.
+   */
+  managerNotificationRecipientId: string;
 }
 
 /** Same shape as ConversationEngine's handleMessages, so composition.ts can plug either one into the same shared debounce/drain core. */
 export type MessageHandler = (customerId: string, messages: InboundMessage[]) => Promise<void>;
+
+/**
+ * Best-effort, mirrors ConversationEngine's own `notifyManager`: never
+ * allowed to affect the customer's own reply, a failure here is logged and
+ * swallowed rather than thrown. No LLM call to generate this -- it's a
+ * plain, deterministic rendering of the customer's own message, not a
+ * summarized digest, so it costs nothing against the (badly
+ * quota-constrained) Gemini budget.
+ */
+async function notifyManagerOfInstagramLead(
+  deps: Pick<InstagramRedirectHandlerDependencies, "messageSender" | "managerNotificationRecipientId" | "logger">,
+  context: { customerId: string; customerMessage: string }
+): Promise<void> {
+  const notificationText = [
+    "Instagram-лид (авто-редирект в Telegram)",
+    `Клиент: ${context.customerId}`,
+    `Сообщение: ${context.customerMessage}`,
+  ].join("\n");
+
+  try {
+    await deps.messageSender.sendReply(deps.managerNotificationRecipientId, [notificationText]);
+    deps.logger.info("manager_notification.sent", { customerId: context.customerId, reason: "instagram_redirect" });
+  } catch (error) {
+    deps.logger.error("manager_notification.failed", {
+      customerId: context.customerId,
+      reason: "instagram_redirect",
+      error: (error as Error).message,
+    });
+  }
+}
 
 export function createInstagramRedirectHandler(deps: InstagramRedirectHandlerDependencies): MessageHandler {
   return async function handleInstagramMessages(customerId, messages) {
@@ -81,5 +118,16 @@ export function createInstagramRedirectHandler(deps: InstagramRedirectHandlerDep
     } catch (error) {
       deps.logger.error("instagram_redirect.send_failed", { customerId, error: (error as Error).message });
     }
+
+    // So staff have visibility into Instagram leads even though the bot
+    // itself never has a real conversation with them -- otherwise a
+    // customer asking a real question on Instagram gets redirected and
+    // nobody at Nuteco ever sees what they actually wanted. A photo/voice
+    // message with no text still counts as a lead worth flagging, just
+    // with nothing to quote.
+    await notifyManagerOfInstagramLead(deps, {
+      customerId,
+      customerMessage: rawText.length > 0 ? rawText : "[без текста — фото или голосовое]",
+    });
   };
 }

@@ -7,11 +7,15 @@ import { createInstagramWebhookHandler } from "../src/adapters/instagram/webhook
 import { MessageDebouncer } from "../src/engine/MessageDebouncer";
 import { createInstagramRedirectHandler } from "../src/engine/instagramRedirectHandler";
 import { InstagramMessageSender } from "../src/adapters/instagram/InstagramMessageSender";
+import { TelegramMessageSender } from "../src/adapters/telegram/TelegramMessageSender";
+import { PlatformRoutingMessageSender } from "../src/adapters/PlatformRoutingMessageSender";
 import { FakeInstagramTransport } from "./support/FakeInstagramTransport";
+import { FakeTelegramTransport } from "./support/FakeTelegramTransport";
 import { fakeLogger } from "./support/FakeLogger";
 import { handleIncomingInstagramUpdate } from "../src/composition";
 
 const TEST_APP_SECRET = "test-app-secret";
+const MANAGER_CHAT_ID = "telegram:999999999";
 
 /**
  * Full-pipeline integration tests for the Instagram adapter: a real local
@@ -23,13 +27,27 @@ const TEST_APP_SECRET = "test-app-secret";
  * telegram-webhook-integration.test.ts's structure exactly, except
  * Telegram still goes through the full ConversationEngine and Instagram
  * doesn't -- see composition.ts's AppDependencies doc comment for why.
+ *
+ * Uses a real PlatformRoutingMessageSender wired to both a fake Instagram
+ * and a fake Telegram transport, not a bare InstagramMessageSender --
+ * the redirect handler's manager-lead notification is sent to a Telegram
+ * recipient, so the fake needs to be able to actually receive it, the same
+ * way production's real composition.ts wiring does.
  */
 function setupServer(options: { appSecret?: string | null; verifyToken?: string } = {}) {
-  const transport = new FakeInstagramTransport();
-  const messageSender = new InstagramMessageSender({ transport, sleep: async () => {} });
+  const instagramTransport = new FakeInstagramTransport();
+  const telegramTransport = new FakeTelegramTransport();
+  const messageSender = new PlatformRoutingMessageSender({
+    instagram: new InstagramMessageSender({ transport: instagramTransport, sleep: async () => {} }),
+    telegram: new TelegramMessageSender({ transport: telegramTransport, sleep: async () => {} }),
+  });
   const debouncer = new MessageDebouncer();
   const { logger, entries: logEntries } = fakeLogger();
-  const instagramHandleMessages = createInstagramRedirectHandler({ messageSender, logger });
+  const instagramHandleMessages = createInstagramRedirectHandler({
+    messageSender,
+    logger,
+    managerNotificationRecipientId: MANAGER_CHAT_ID,
+  });
 
   const webhookHandler = createInstagramWebhookHandler({
     verifyToken: options.verifyToken ?? "test-verify-token",
@@ -40,7 +58,7 @@ function setupServer(options: { appSecret?: string | null; verifyToken?: string 
 
   const server = createServer(webhookHandler);
 
-  return { server, transport, logEntries };
+  return { server, instagramTransport, telegramTransport, logEntries };
 }
 
 /** Fails the test loudly if anything logged an unexpected processing error. Mirrors telegram-webhook-integration.test.ts's assertNoUnexpectedProcessingErrors. */
@@ -95,8 +113,8 @@ async function post(baseUrl: string, path: string, body: unknown, appSecret: str
   return fetch(`${baseUrl}${path}`, { method: "POST", headers, body: serialized });
 }
 
-test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply sent, no LLM/identity involved", async () => {
-  const { server, transport, logEntries } = setupServer();
+test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply sent, manager notified, no LLM/identity involved", async () => {
+  const { server, instagramTransport, telegramTransport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -108,12 +126,26 @@ test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply 
 
     // No typing indicator: this is a fixed template, not a generated
     // reply, so there's nothing to show "thinking" for.
-    assert.deepEqual(transport.calls.map((c) => c.method), ["sendMessage"], "should send exactly one reply, no typing indicator");
-    const sent = transport.calls.find((c) => c.method === "sendMessage");
+    assert.deepEqual(instagramTransport.calls.map((c) => c.method), ["sendMessage"], "should send exactly one reply, no typing indicator");
+    const sent = instagramTransport.calls.find((c) => c.method === "sendMessage");
     assert.ok(sent && sent.method === "sendMessage" && sent.text.includes("t.me/NutecoPremium"), "reply should be the Telegram redirect template");
+
+    // The manager-lead notification -- separate from the customer's own
+    // reply, sent to the Telegram chat, not the Instagram thread.
+    assert.equal(telegramTransport.calls.length, 1);
+    const notified = telegramTransport.calls[0];
+    assert.equal(notified.method, "sendMessage");
+    assert.ok(notified.method === "sendMessage" && notified.chatId === 999999999);
+    assert.ok(
+      notified.method === "sendMessage" &&
+        notified.text.includes("instagram:555555555555555") &&
+        notified.text.includes("What's the price of almond flour?"),
+      "manager notification should name the customer and quote what they actually asked"
+    );
 
     assertNoUnexpectedProcessingErrors(logEntries);
     assert.ok(logEntries.some((e) => e.event === "webhook.received"));
+    assert.ok(logEntries.some((e) => e.event === "manager_notification.sent" && e.fields.customerId === "instagram:555555555555555"));
     assert.ok(logEntries.some((e) => e.event === "conversation.started" && e.fields.customerId === "instagram:555555555555555"));
     assert.ok(logEntries.some((e) => e.event === "conversation.ended" && e.fields.customerId === "instagram:555555555555555"));
   } finally {
@@ -121,8 +153,8 @@ test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply 
   }
 });
 
-test("a duplicate webhook delivery of the same message results in only one reply, not two", async () => {
-  const { server, transport, logEntries } = setupServer();
+test("a duplicate webhook delivery of the same message results in only one reply and one manager notification, not two", async () => {
+  const { server, instagramTransport, telegramTransport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -136,8 +168,9 @@ test("a duplicate webhook delivery of the same message results in only one reply
     assert.equal(second.status, 200, "the webhook should still ack a duplicate, not error");
     await new Promise((resolve) => setImmediate(resolve));
 
-    const sendCount = transport.calls.filter((c) => c.method === "sendMessage").length;
+    const sendCount = instagramTransport.calls.filter((c) => c.method === "sendMessage").length;
     assert.equal(sendCount, 1, "the duplicate delivery must not trigger a second reply");
+    assert.equal(telegramTransport.calls.length, 1, "the duplicate delivery must not trigger a second manager notification either");
 
     assertNoUnexpectedProcessingErrors(logEntries);
     assert.ok(logEntries.some((e) => e.event === "message.duplicate_ignored"));
@@ -146,8 +179,8 @@ test("a duplicate webhook delivery of the same message results in only one reply
   }
 });
 
-test("a batched webhook POST with two messaging events answers both", async () => {
-  const { server, transport } = setupServer();
+test("a batched webhook POST with two messaging events answers both and notifies the manager twice", async () => {
+  const { server, instagramTransport, telegramTransport } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -169,15 +202,16 @@ test("a batched webhook POST with two messaging events answers both", async () =
     assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
 
-    const sendCount = transport.calls.filter((c) => c.method === "sendMessage").length;
+    const sendCount = instagramTransport.calls.filter((c) => c.method === "sendMessage").length;
     assert.equal(sendCount, 2, "both messages in the batch should each get a reply");
+    assert.equal(telegramTransport.calls.length, 2, "and each should be its own manager notification, one per customer");
   } finally {
     await closeServer(server);
   }
 });
 
-test("a message echoed back from the page itself is ignored, not answered", async () => {
-  const { server, transport, logEntries } = setupServer();
+test("a message echoed back from the page itself is ignored, not answered, and never notifies the manager", async () => {
+  const { server, instagramTransport, telegramTransport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -203,7 +237,8 @@ test("a message echoed back from the page itself is ignored, not answered", asyn
     assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(transport.calls.length, 0);
+    assert.equal(instagramTransport.calls.length, 0);
+    assert.equal(telegramTransport.calls.length, 0, "an echo of our own message is not a lead worth notifying anyone about");
     assertNoUnexpectedProcessingErrors(logEntries);
     assert.ok(logEntries.some((e) => e.event === "webhook.update_unsupported" && e.fields.updateType === "message_echo"));
   } finally {
@@ -278,7 +313,7 @@ test("a POST with an incorrect signature is rejected with 401", async () => {
 });
 
 test("a POST with the correct signature is accepted", async () => {
-  const { server, transport } = setupServer();
+  const { server, instagramTransport } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -286,14 +321,14 @@ test("a POST with the correct signature is accepted", async () => {
     const response = await post(baseUrl, "/instagram/webhook", body);
     assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(transport.calls.some((c) => c.method === "sendMessage"));
+    assert.ok(instagramTransport.calls.some((c) => c.method === "sendMessage"));
   } finally {
     await closeServer(server);
   }
 });
 
 test("a request with no app secret configured skips the signature check entirely", async () => {
-  const { server, transport } = setupServer({ appSecret: null });
+  const { server, instagramTransport } = setupServer({ appSecret: null });
   const baseUrl = await listen(server);
 
   try {
@@ -305,7 +340,7 @@ test("a request with no app secret configured skips the signature check entirely
     });
     assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(transport.calls.some((c) => c.method === "sendMessage"));
+    assert.ok(instagramTransport.calls.some((c) => c.method === "sendMessage"));
   } finally {
     await closeServer(server);
   }
@@ -325,7 +360,7 @@ test("a non-GET, non-POST request is rejected with 405", async () => {
 });
 
 test("a malformed JSON body is acknowledged (so Meta stops retrying it) but produces no reply", async () => {
-  const { server, transport, logEntries } = setupServer();
+  const { server, instagramTransport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -337,7 +372,7 @@ test("a malformed JSON body is acknowledged (so Meta stops retrying it) but prod
     });
     assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(transport.calls.length, 0);
+    assert.equal(instagramTransport.calls.length, 0);
     assert.ok(logEntries.some((e) => e.event === "webhook.parse_error"));
   } finally {
     await closeServer(server);
@@ -345,7 +380,7 @@ test("a malformed JSON body is acknowledged (so Meta stops retrying it) but prod
 });
 
 test("a request body over the size limit is rejected with 413, checked before signature verification", async () => {
-  const { server, transport, logEntries } = setupServer();
+  const { server, instagramTransport, logEntries } = setupServer();
   const baseUrl = await listen(server);
 
   try {
@@ -357,7 +392,7 @@ test("a request body over the size limit is rejected with 413, checked before si
     });
     assert.equal(response.status, 413);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(transport.calls.length, 0);
+    assert.equal(instagramTransport.calls.length, 0);
     assert.ok(logEntries.some((e) => e.event === "webhook.rejected_body_too_large"));
   } finally {
     await closeServer(server);
