@@ -88,6 +88,11 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
   const debouncer = new MessageDebouncer({ persistedStore: new SqliteProcessedMessageStore(db) });
   const llmProvider = new GeminiProvider({ apiKey: config.geminiApiKey, model: config.geminiModel, logger });
 
+  // Computed once, shared by both handlers below -- there is only ever one
+  // manager notification chat configured, and both the full engine's
+  // escalations and the Instagram redirect's lead notifications go to it.
+  const managerNotificationRecipientId = `telegram:${config.managerNotificationChatId}`;
+
   const handleMessages = createConversationEngine({
     llmProvider,
     messageSender,
@@ -101,14 +106,11 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     // here, the one place this project's concrete platform choices are
     // made -- ConversationEngine itself treats this the same opaque way
     // it treats every customerId, never assuming or inspecting the format.
-    // Manager notifications always go to Telegram regardless of which
-    // platform a customer messaged in on -- there is only ever one
-    // manager notification chat configured, and it's a Telegram chat ID.
-    managerNotificationRecipientId: `telegram:${config.managerNotificationChatId}`,
+    managerNotificationRecipientId,
   });
 
   const instagramHandleMessages = config.instagram
-    ? createInstagramRedirectHandler({ messageSender, logger })
+    ? createInstagramRedirectHandler({ messageSender, logger, managerNotificationRecipientId })
     : null;
 
   return {
