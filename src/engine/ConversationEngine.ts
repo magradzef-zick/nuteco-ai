@@ -81,11 +81,28 @@ interface StoredHistory {
  */
 async function notifyManager(
   deps: Pick<ConversationEngineDependencies, "messageSender" | "managerNotificationRecipientId" | "logger">,
-  context: { customerId: string; reason: string; customerMessage: string }
+  context: {
+    customerId: string;
+    reason: string;
+    customerMessage: string;
+    /** Already resolved by the platform adapter (e.g. "@username" for Telegram) -- see NormalizedMessage.ts. Null when the platform gave nothing better than the raw id. */
+    senderDisplayName: string | null;
+    senderProfileUrl: string | null;
+  }
 ): Promise<void> {
+  // "@username (https://t.me/username)" when both are known; the display
+  // name alone when there's no link to give (no public username); the
+  // raw customerId as a last resort so the manager always has *something*
+  // to identify the customer by.
+  const clientLine = context.senderDisplayName
+    ? context.senderProfileUrl
+      ? `${context.senderDisplayName} (${context.senderProfileUrl})`
+      : `${context.senderDisplayName} (${context.customerId})`
+    : context.customerId;
+
   const notificationText = [
     `Эскалация (${context.reason})`,
-    `Клиент: ${context.customerId}`,
+    `Клиент: ${clientLine}`,
     `Сообщение: ${context.customerMessage}`,
   ].join("\n");
 
@@ -115,6 +132,11 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       .filter((text): text is string => text !== null && text.trim().length > 0)
       .join("\n");
     const language = detectLanguage(rawText);
+    // Every message in this batch is from the same customer, so any one
+    // of them carries the same sender identity -- the first is as good as
+    // any other.
+    const senderDisplayName = rawPayloads[0]?.senderDisplayName ?? null;
+    const senderProfileUrl = rawPayloads[0]?.senderProfileUrl ?? null;
 
     // Fail closed: an unreachable store means an honest escalation, not
     // silence and not a stateless reply that would quietly reproduce the
@@ -128,7 +150,13 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         error: (error as Error).message,
       });
       await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)]);
-      await notifyManager(deps, { customerId, reason: "state_store_unavailable", customerMessage: rawText });
+      await notifyManager(deps, {
+        customerId,
+        reason: "state_store_unavailable",
+        customerMessage: rawText,
+        senderDisplayName,
+        senderProfileUrl,
+      });
       return;
     }
 
@@ -153,7 +181,13 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         error: (error as Error).message,
       });
       await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)]);
-      await notifyManager(deps, { customerId, reason: "state_store_unavailable", customerMessage: combinedUserMessage });
+      await notifyManager(deps, {
+        customerId,
+        reason: "state_store_unavailable",
+        customerMessage: combinedUserMessage,
+        senderDisplayName,
+        senderProfileUrl,
+      });
       return;
     }
     const history = extractHistory(state?.variables);
@@ -236,7 +270,13 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     await deps.messageSender.sendReply(customerId, splitIntoMessages(finalReplyText));
 
     if (escalated && escalationReason !== null) {
-      await notifyManager(deps, { customerId, reason: escalationReason, customerMessage: combinedUserMessage });
+      await notifyManager(deps, {
+        customerId,
+        reason: escalationReason,
+        customerMessage: combinedUserMessage,
+        senderDisplayName,
+        senderProfileUrl,
+      });
     }
 
     const newTurns: LlmConversationTurn[] = [

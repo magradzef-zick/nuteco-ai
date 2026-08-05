@@ -23,7 +23,12 @@ function setup() {
     telegram: new TelegramMessageSender({ transport: telegramTransport, sleep: async () => {} }),
   });
   const { logger, entries: logEntries } = fakeLogger();
-  const handle = createInstagramRedirectHandler({ messageSender, logger, managerNotificationRecipientId: MANAGER_CHAT_ID });
+  const handle = createInstagramRedirectHandler({
+    messageSender,
+    instagramTransport,
+    logger,
+    managerNotificationRecipientId: MANAGER_CHAT_ID,
+  });
   return { handle, instagramTransport, telegramTransport, logEntries };
 }
 
@@ -88,7 +93,10 @@ test("never sends a typing indicator -- this is a fixed template, not a generate
   const { handle, instagramTransport } = setup();
   await handle("instagram:6", [textMessage("instagram:6", "m6", "Hello")]);
 
-  assert.deepEqual(instagramTransport.calls.map((c) => c.method), ["sendMessage"]);
+  // getUserProfile is expected now (resolving the manager notification's
+  // username) -- sendSenderAction (the typing indicator) is what this
+  // test actually checks for.
+  assert.equal(instagramTransport.calls.filter((c) => c.method === "sendSenderAction").length, 0);
 });
 
 test("a send failure to the customer is caught and logged, never thrown -- composition.ts's drainBatches relies on this to avoid a stuck queue", async () => {
@@ -102,7 +110,12 @@ test("a send failure to the customer is caught and logged, never thrown -- compo
     telegram: new TelegramMessageSender({ transport: telegramTransport, sleep: async () => {} }),
   });
   const { logger, entries: logEntries } = fakeLogger();
-  const handle = createInstagramRedirectHandler({ messageSender, logger, managerNotificationRecipientId: MANAGER_CHAT_ID });
+  const handle = createInstagramRedirectHandler({
+    messageSender,
+    instagramTransport,
+    logger,
+    managerNotificationRecipientId: MANAGER_CHAT_ID,
+  });
 
   await assert.doesNotReject(() => handle("instagram:7", [textMessage("instagram:7", "m7", "Hello")]));
 
@@ -131,6 +144,40 @@ test("a photo/voice message with no text still notifies the manager, flagged as 
   assert.match(text, /без текста/);
 });
 
+test("when the customer's profile has a public username, the manager notification names it with a clickable instagram.com link, not the bare id", async () => {
+  const { handle, instagramTransport, telegramTransport } = setup();
+  instagramTransport.userProfilesByIgsid["11"] = { username: "gulnara.khakimova.79", name: "Gulnara Khakimova" };
+
+  await handle("instagram:11", [textMessage("instagram:11", "m11", "Здравствуйте!")]);
+
+  const text = managerNotificationText(telegramTransport);
+  assert.match(text, /@gulnara\.khakimova\.79/);
+  assert.match(text, /instagram\.com\/gulnara\.khakimova\.79/);
+  assert.ok(instagramTransport.calls.some((c) => c.method === "getUserProfile" && c.igsid === "11"));
+});
+
+test("when the profile has a name but no public username, the manager sees the name -- no link is invented", async () => {
+  const { handle, instagramTransport, telegramTransport } = setup();
+  instagramTransport.userProfilesByIgsid["12"] = { username: null, name: "Gulnara Khakimova" };
+
+  await handle("instagram:12", [textMessage("instagram:12", "m12", "Здравствуйте!")]);
+
+  const text = managerNotificationText(telegramTransport);
+  assert.match(text, /Gulnara Khakimova/);
+  assert.doesNotMatch(text, /instagram\.com/, "no username means no real profile link exists -- must not fabricate one");
+});
+
+test("when the profile lookup itself fails, the manager still gets the raw id, not a broken notification", async () => {
+  const { handle, instagramTransport, telegramTransport, logEntries } = setup();
+  instagramTransport.getUserProfileError = new Error("simulated Graph API failure");
+
+  await handle("instagram:13", [textMessage("instagram:13", "m13", "Здравствуйте!")]);
+
+  const text = managerNotificationText(telegramTransport);
+  assert.match(text, /instagram:13/);
+  assert.ok(logEntries.some((e) => e.event === "instagram_redirect.profile_lookup_failed" && e.fields.customerId === "instagram:13"));
+});
+
 test("a manager-notification send failure is caught and logged, and does not prevent the customer's own reply", async () => {
   const instagramTransport = new FakeInstagramTransport();
   const telegramTransport = new FakeTelegramTransport();
@@ -142,7 +189,12 @@ test("a manager-notification send failure is caught and logged, and does not pre
     telegram: new TelegramMessageSender({ transport: telegramTransport, sleep: async () => {} }),
   });
   const { logger, entries: logEntries } = fakeLogger();
-  const handle = createInstagramRedirectHandler({ messageSender, logger, managerNotificationRecipientId: MANAGER_CHAT_ID });
+  const handle = createInstagramRedirectHandler({
+    messageSender,
+    instagramTransport,
+    logger,
+    managerNotificationRecipientId: MANAGER_CHAT_ID,
+  });
 
   await assert.doesNotReject(() => handle("instagram:10", [textMessage("instagram:10", "m10", "Hello")]));
 

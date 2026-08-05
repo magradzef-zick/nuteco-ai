@@ -86,6 +86,14 @@ export class HttpInstagramTransport implements InstagramTransport {
     return { id: result.id, username: result.username ?? null };
   }
 
+  async getUserProfile(igsid: string): Promise<{ username: string | null; name: string | null }> {
+    const result = (await this.callApi("GET", igsid, undefined, { fields: "username,name" })) as {
+      username?: string;
+      name?: string;
+    };
+    return { username: result.username ?? null, name: result.name ?? null };
+  }
+
   async subscribeWebhookFields(fields: string[]): Promise<void> {
     await this.callApi("POST", `${this.pageId}/subscribed_apps`, undefined, { subscribed_fields: fields.join(",") });
   }

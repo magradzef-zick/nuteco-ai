@@ -61,6 +61,17 @@ export interface NormalizedInstagramMessage {
   mediaType: InstagramMediaType | null;
   /** Unix milliseconds, from Meta's per-event `timestamp`. */
   timestamp: number;
+  /**
+   * See NormalizedMessage.ts. Always null here, deliberately: resolving
+   * an Instagram username needs an extra Graph API call (see
+   * InstagramTransport.getUserProfile), which this synchronous parser
+   * can't make. instagramRedirectHandler.ts does that lookup itself,
+   * independently of this field, for Instagram's own manager
+   * notification -- this field only matters for a platform whose adapter
+   * can resolve it synchronously (Telegram).
+   */
+  senderDisplayName: null;
+  senderProfileUrl: null;
 }
 
 /** Known Instagram messaging-event shapes this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap, matching telegram/parseUpdate.ts's KNOWN_UNSUPPORTED_UPDATE_TYPES convention. */
@@ -141,6 +152,8 @@ function toInboundMessage(event: InstagramMessagingEvent, message: InstagramMess
     text: message.text ?? null,
     mediaType: detectMediaType(message),
     timestamp: event.timestamp,
+    senderDisplayName: null,
+    senderProfileUrl: null,
   };
 
   return {

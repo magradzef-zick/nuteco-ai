@@ -120,7 +120,15 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
   });
 
   const instagramHandleMessages = config.instagram
-    ? createInstagramRedirectHandler({ messageSender, logger, managerNotificationRecipientId })
+    ? createInstagramRedirectHandler({
+        messageSender,
+        // Non-null by construction: `instagramTransport` is only ever
+        // still null here if `config.instagram` was falsy, which this
+        // branch has already ruled out.
+        instagramTransport: instagramTransport!,
+        logger,
+        managerNotificationRecipientId,
+      })
     : null;
 
   return {

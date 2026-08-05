@@ -74,6 +74,27 @@ test("getProfile returns the connected account's identity", async () => {
   assert.ok(requests[0].url.includes("fields=id%2Cusername") || requests[0].url.includes("fields=id,username"));
 });
 
+test("getUserProfile looks up a customer's username and name by their IGSID", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse({ id: "1711163583440485", username: "gulnara.khakimova.79", name: "Gulnara Khakimova" })]);
+  const transport = new HttpInstagramTransport({ pageAccessToken: "PAGE_TOKEN", pageId: "17841400000000000", fetchImpl });
+
+  const profile = await transport.getUserProfile("1711163583440485");
+
+  assert.deepEqual(profile, { username: "gulnara.khakimova.79", name: "Gulnara Khakimova" });
+  assert.equal(requests[0].method, "GET");
+  assert.ok(requests[0].url.includes("/1711163583440485?"), "must look up the customer's own igsid, not /me");
+  assert.ok(requests[0].url.includes("fields=username%2Cname") || requests[0].url.includes("fields=username,name"));
+});
+
+test("getUserProfile returns nulls, not throwing, when Meta's response omits a field (a private/deactivated account, or one that's revoked app access)", async () => {
+  const { fetchImpl } = fakeFetch([okResponse({ id: "999" })]);
+  const transport = new HttpInstagramTransport({ pageAccessToken: "PAGE_TOKEN", pageId: "17841400000000000", fetchImpl });
+
+  const profile = await transport.getUserProfile("999");
+
+  assert.deepEqual(profile, { username: null, name: null });
+});
+
 test("subscribeWebhookFields posts to <pageId>/subscribed_apps with the joined field list", async () => {
   const { fetchImpl, requests } = fakeFetch([okResponse({ success: true })]);
   const transport = new HttpInstagramTransport({ pageAccessToken: "PAGE_TOKEN", pageId: "17841400000000000", fetchImpl });

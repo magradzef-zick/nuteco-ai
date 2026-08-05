@@ -35,6 +35,41 @@ test("parses a plain text message into an InboundMessage", () => {
   assert.equal(payload.chatId, 555);
 });
 
+test("a sender with a public username gets a clickable t.me profile link", () => {
+  const result = parseUpdate(textMessageUpdate({ from: { id: 555, username: "gulnara_k", first_name: "Gulnara" } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+  const payload = result.message.payload as NormalizedTelegramMessage;
+
+  // The username wins over the name -- it's the only one that yields a
+  // real, working link.
+  assert.equal(payload.senderDisplayName, "@gulnara_k");
+  assert.equal(payload.senderProfileUrl, "https://t.me/gulnara_k");
+});
+
+test("a sender with no username falls back to their name, with no link -- Telegram usernames are optional, not every real user has one", () => {
+  const result = parseUpdate(textMessageUpdate({ from: { id: 555, first_name: "Gulnara", last_name: "Khakimova" } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+  const payload = result.message.payload as NormalizedTelegramMessage;
+
+  assert.equal(payload.senderDisplayName, "Gulnara Khakimova");
+  assert.equal(payload.senderProfileUrl, null, "no username means no reliable way to build a clickable link");
+});
+
+test("a sender with neither a username nor a name yields no display info at all, not an empty string", () => {
+  const result = parseUpdate(textMessageUpdate({ from: { id: 555 } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+  const payload = result.message.payload as NormalizedTelegramMessage;
+
+  assert.equal(payload.senderDisplayName, null);
+  assert.equal(payload.senderProfileUrl, null);
+});
+
 test("parses an edited message, flags it, and uses edit_date as the timestamp", () => {
   const update = {
     update_id: 2,

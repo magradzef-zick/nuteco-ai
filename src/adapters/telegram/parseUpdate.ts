@@ -12,6 +12,8 @@ interface TelegramMessage {
   date: number;
   edit_date?: number;
   chat: { id: number };
+  /** The message's sender. Absent only for channel posts (not read by this project) -- always present on a private-chat message. */
+  from?: { username?: string; first_name?: string; last_name?: string };
   text?: string;
   photo?: unknown[];
   voice?: unknown;
@@ -50,6 +52,10 @@ export interface NormalizedTelegramMessage {
   isEdited: boolean;
   /** Unix seconds, from Telegram's `date` (or `edit_date` for an edited message). */
   timestamp: number;
+  /** See NormalizedMessage.ts. "@username" when Telegram gave one -- not every user has one, so this is often null. */
+  senderDisplayName: string | null;
+  /** See NormalizedMessage.ts. Only ever set alongside senderDisplayName's "@username" form -- a bare first/last name yields no clickable link. */
+  senderProfileUrl: string | null;
 }
 
 /** Known Telegram update fields this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap. */
@@ -86,6 +92,7 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
   const chatId = message.chat.id;
   const customerId = `telegram:${chatId}`;
   const messageId = `${chatId}:${message.message_id}`;
+  const { senderDisplayName, senderProfileUrl } = describeSender(message.from);
 
   const normalized: NormalizedTelegramMessage = {
     platform: "telegram",
@@ -96,6 +103,8 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
     mediaType: detectMediaType(message),
     isEdited,
     timestamp: isEdited ? message.edit_date ?? message.date : message.date,
+    senderDisplayName,
+    senderProfileUrl,
   };
 
   return {
@@ -104,6 +113,21 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
     sequence: message.message_id,
     payload: normalized,
   };
+}
+
+/**
+ * Prefers `@username` (a real Telegram username is globally unique and
+ * always yields a working `t.me/<username>` deep link) over the sender's
+ * name -- a username is not guaranteed to exist at all, since it's an
+ * optional field a user may never set, in which case there is no reliable
+ * way to build a clickable link to them from outside the chat.
+ */
+function describeSender(from: TelegramMessage["from"]): { senderDisplayName: string | null; senderProfileUrl: string | null } {
+  if (from?.username) {
+    return { senderDisplayName: `@${from.username}`, senderProfileUrl: `https://t.me/${from.username}` };
+  }
+  const name = [from?.first_name, from?.last_name].filter(Boolean).join(" ").trim();
+  return { senderDisplayName: name.length > 0 ? name : null, senderProfileUrl: null };
 }
 
 function detectMediaType(message: TelegramMessage): TelegramMediaType | null {

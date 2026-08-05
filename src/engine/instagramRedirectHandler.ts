@@ -1,6 +1,8 @@
 import type { InboundMessage } from "./MessageDebouncer";
 import type { NormalizedMessage } from "../adapters/NormalizedMessage";
 import type { MessageSender } from "../adapters/MessageSender";
+import type { InstagramTransport } from "../adapters/instagram/InstagramTransport";
+import { parseInstagramRecipientId } from "../adapters/instagram/InstagramMessageSender";
 import { detectLanguage, type DetectedLanguage } from "./languageDetector";
 import type { Logger } from "../observability/logger";
 
@@ -57,6 +59,13 @@ https://t.me/NutecoPremium`,
 
 export interface InstagramRedirectHandlerDependencies {
   messageSender: MessageSender;
+  /**
+   * Used only to resolve a customer's username for the manager
+   * notification (getUserProfile) -- confirmed live against production
+   * to work with this project's Instagram-Login token, no extra
+   * permission needed. Not used to send anything.
+   */
+  instagramTransport: InstagramTransport;
   logger: Logger;
   /**
    * Same recipient ConversationEngine already escalates to (the client's
@@ -67,24 +76,60 @@ export interface InstagramRedirectHandlerDependencies {
   managerNotificationRecipientId: string;
 }
 
+/**
+ * Best-effort human-readable identity for the manager notification --
+ * `@username` with a clickable `instagram.com/<username>` link when
+ * Meta's user-profile lookup returns one, else the customer's display
+ * name, else the raw IGSID (still needed as a last resort: a deactivated
+ * account, a lookup failure, or someone who's revoked profile access to
+ * apps entirely all return nothing usable).
+ */
+async function describeInstagramCustomer(
+  transport: InstagramTransport,
+  customerId: string,
+  logger: Logger
+): Promise<string> {
+  let igsid: string;
+  try {
+    igsid = parseInstagramRecipientId(customerId);
+  } catch {
+    return customerId;
+  }
+
+  try {
+    const profile = await transport.getUserProfile(igsid);
+    if (profile.username) {
+      return `@${profile.username} (https://instagram.com/${profile.username})`;
+    }
+    if (profile.name) {
+      return `${profile.name} (без публичного @username — ссылку дать нельзя, id: ${igsid})`;
+    }
+  } catch (error) {
+    logger.error("instagram_redirect.profile_lookup_failed", { customerId, error: (error as Error).message });
+  }
+
+  return `instagram:${igsid}`;
+}
+
 /** Same shape as ConversationEngine's handleMessages, so composition.ts can plug either one into the same shared debounce/drain core. */
 export type MessageHandler = (customerId: string, messages: InboundMessage[]) => Promise<void>;
 
 /**
  * Best-effort, mirrors ConversationEngine's own `notifyManager`: never
  * allowed to affect the customer's own reply, a failure here is logged and
- * swallowed rather than thrown. No LLM call to generate this -- it's a
- * plain, deterministic rendering of the customer's own message, not a
- * summarized digest, so it costs nothing against the (badly
- * quota-constrained) Gemini budget.
+ * swallowed rather than thrown. No LLM call anywhere in this -- the
+ * profile lookup is a Graph API call (Meta, not Gemini), so this costs
+ * nothing against the free-tier Gemini quota that's the actual
+ * bottleneck; it does cost one extra HTTP round trip per lead.
  */
 async function notifyManagerOfInstagramLead(
-  deps: Pick<InstagramRedirectHandlerDependencies, "messageSender" | "managerNotificationRecipientId" | "logger">,
+  deps: Pick<InstagramRedirectHandlerDependencies, "messageSender" | "instagramTransport" | "managerNotificationRecipientId" | "logger">,
   context: { customerId: string; customerMessage: string }
 ): Promise<void> {
+  const customerDescription = await describeInstagramCustomer(deps.instagramTransport, context.customerId, deps.logger);
   const notificationText = [
     "Instagram-лид (авто-редирект в Telegram)",
-    `Клиент: ${context.customerId}`,
+    `Клиент: ${customerDescription}`,
     `Сообщение: ${context.customerMessage}`,
   ].join("\n");
 

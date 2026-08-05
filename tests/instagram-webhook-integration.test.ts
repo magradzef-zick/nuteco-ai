@@ -45,6 +45,7 @@ function setupServer(options: { appSecret?: string | null; verifyToken?: string 
   const { logger, entries: logEntries } = fakeLogger();
   const instagramHandleMessages = createInstagramRedirectHandler({
     messageSender,
+    instagramTransport,
     logger,
     managerNotificationRecipientId: MANAGER_CHAT_ID,
   });
@@ -125,8 +126,10 @@ test("a real text message flows end-to-end: 200 ack, redirect-to-Telegram reply 
     await new Promise((resolve) => setImmediate(resolve));
 
     // No typing indicator: this is a fixed template, not a generated
-    // reply, so there's nothing to show "thinking" for.
-    assert.deepEqual(instagramTransport.calls.map((c) => c.method), ["sendMessage"], "should send exactly one reply, no typing indicator");
+    // reply, so there's nothing to show "thinking" for. getUserProfile is
+    // expected -- it resolves the manager notification's username.
+    assert.equal(instagramTransport.calls.filter((c) => c.method === "sendMessage").length, 1, "exactly one reply");
+    assert.equal(instagramTransport.calls.filter((c) => c.method === "sendSenderAction").length, 0, "no typing indicator");
     const sent = instagramTransport.calls.find((c) => c.method === "sendMessage");
     assert.ok(sent && sent.method === "sendMessage" && sent.text.includes("t.me/NutecoPremium"), "reply should be the Telegram redirect template");
 

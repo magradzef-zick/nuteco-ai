@@ -13,6 +13,17 @@ export interface InstagramTransport {
   /** Confirms the page access token is valid and returns the connected account's own identity. Used only for startup validation. */
   getProfile(): Promise<{ id: string; username: string | null }>;
   /**
+   * Looks up a customer's own profile (name, username) by their
+   * Instagram-scoped ID -- confirmed live against production: works with
+   * the Instagram-Login token this project uses, no extra permission
+   * beyond what's already granted. Used to give a manager notification a
+   * clickable `instagram.com/<username>` link instead of a bare numeric
+   * ID. Either field can come back null (a deactivated/private account, a
+   * user who's revoked data access) -- callers must handle that, not
+   * assume it's always populated.
+   */
+  getUserProfile(igsid: string): Promise<{ username: string | null; name: string | null }>;
+  /**
    * Subscribes the configured Instagram-linked page to receive webhook
    * events for the given fields (e.g. "messages"). A one-time deployment
    * step, not called per-message. Unlike Telegram's setWebhook, this does

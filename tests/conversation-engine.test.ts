@@ -59,6 +59,15 @@ function textMessage(customerId: string, messageId: string, text: string): Inbou
   return { customerId, messageId, sequence: 1, payload: { text, mediaType: null } };
 }
 
+function textMessageWithSender(
+  customerId: string,
+  messageId: string,
+  text: string,
+  sender: { senderDisplayName: string | null; senderProfileUrl: string | null }
+): InboundMessage {
+  return { customerId, messageId, sequence: 1, payload: { text, mediaType: null, ...sender } };
+}
+
 function mediaMessage(customerId: string, messageId: string, mediaType: string): InboundMessage {
   return { customerId, messageId, sequence: 1, payload: { text: null, mediaType } };
 }
@@ -401,6 +410,55 @@ test("when the model itself signals an escalation via the [ESCALATE] marker, the
   assert.match(managerCall.text, /Дайте скидку 20%/, "the notification should include the customer's actual message for context");
 
   assert.ok(logEntries.some((e) => e.event === "escalation.triggered" && e.fields.reason === "llm_judged_escalation"));
+});
+
+test("when the sender has a resolved username and profile link, the manager notification names and links them instead of the bare customer id", async () => {
+  const { handleMessages, transport } = setup([
+    "Извините, скидки предоставляет только менеджер, я вас с ним свяжу.\n\n[ESCALATE]",
+  ]);
+
+  await handleMessages("telegram:33", [
+    textMessageWithSender("telegram:33", "m1", "Дайте скидку 20%", {
+      senderDisplayName: "@gulnara_k",
+      senderProfileUrl: "https://t.me/gulnara_k",
+    }),
+  ]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.match(managerCall.text, /@gulnara_k/);
+  assert.match(managerCall.text, /https:\/\/t\.me\/gulnara_k/);
+});
+
+test("when the sender has a name but no username (no link possible), the manager sees the name next to the raw customer id, not a fabricated link", async () => {
+  const { handleMessages, transport } = setup([
+    "Извините, скидки предоставляет только менеджер, я вас с ним свяжу.\n\n[ESCALATE]",
+  ]);
+
+  await handleMessages("telegram:34", [
+    textMessageWithSender("telegram:34", "m1", "Дайте скидку 20%", {
+      senderDisplayName: "Gulnara Khakimova",
+      senderProfileUrl: null,
+    }),
+  ]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.match(managerCall.text, /Gulnara Khakimova/);
+  assert.match(managerCall.text, /telegram:34/, "the raw id is still shown alongside a linkless name, so the manager isn't left with nothing to act on");
+  assert.doesNotMatch(managerCall.text, /https:\/\/t\.me/, "no username means no real link exists -- must not invent one");
+});
+
+test("when the platform gave no sender info at all, the manager notification falls back to the bare customer id, exactly as before this feature existed", async () => {
+  const { handleMessages, transport } = setup([
+    "Извините, скидки предоставляет только менеджер, я вас с ним свяжу.\n\n[ESCALATE]",
+  ]);
+
+  await handleMessages("telegram:35", [textMessage("telegram:35", "m1", "Дайте скидку 20%")]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.match(managerCall.text, /Клиент: telegram:35/);
 });
 
 test("the [ESCALATE] marker is only recognized at the very end of a reply, not anywhere it might coincidentally appear", async () => {
