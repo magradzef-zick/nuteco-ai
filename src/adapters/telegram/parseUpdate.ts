@@ -23,12 +23,22 @@ interface TelegramMessage {
   location?: { latitude: number; longitude: number };
   contact?: { phone_number: string };
   document?: unknown;
+  /**
+   * Present only on a message belonging to a Telegram Business chat (see
+   * https://core.telegram.org/bots/api#business-connection) -- the same
+   * id must be echoed back on every outgoing Bot API call replying in
+   * that chat (sendMessage, sendChatAction), or Telegram rejects it.
+   */
+  business_connection_id?: string;
 }
 
 interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
+  /** A message in a Telegram Business chat -- structurally identical to `message`, just carrying `business_connection_id`. See toInboundMessage. */
+  business_message?: TelegramMessage;
+  edited_business_message?: TelegramMessage;
   [otherUpdateType: string]: unknown;
 }
 
@@ -60,6 +70,8 @@ export interface NormalizedTelegramMessage {
   sharedPhoneNumber: string | null;
   /** See NormalizedMessage.ts. Set only when this message is a shared location. */
   sharedLocation: { latitude: number; longitude: number } | null;
+  /** See NormalizedMessage.ts. Set only on a message from a Telegram Business chat (Secretary Mode); null for an ordinary chat. */
+  businessConnectionId: string | null;
 }
 
 /** Known Telegram update fields this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap. */
@@ -70,6 +82,13 @@ const KNOWN_UNSUPPORTED_UPDATE_TYPES = [
   "inline_query",
   "my_chat_member",
   "chat_member",
+  // Business-connection lifecycle events (a connection was created,
+  // modified, or a business message was deleted) -- not customer
+  // messages, so there's nothing here for the conversation engine to
+  // reply to. Listed explicitly so they're a documented no-op rather than
+  // logged as an unrecognized "unknown" update.
+  "business_connection",
+  "deleted_business_messages",
 ];
 
 export function parseUpdate(raw: unknown): ParsedUpdateResult {
@@ -81,6 +100,19 @@ export function parseUpdate(raw: unknown): ParsedUpdateResult {
 
   if (update.edited_message) {
     return { kind: "message", message: toInboundMessage(update.edited_message, true) };
+  }
+
+  // A Telegram Business (Secretary Mode) chat message -- structurally the
+  // same Message shape as `message`/`edited_message`, so it reuses the
+  // exact same conversation logic; only `business_connection_id` (read in
+  // toInboundMessage below) differs, and that's threaded through to every
+  // reply so Telegram delivers it via the right business connection.
+  if (update.business_message) {
+    return { kind: "message", message: toInboundMessage(update.business_message, false) };
+  }
+
+  if (update.edited_business_message) {
+    return { kind: "message", message: toInboundMessage(update.edited_business_message, true) };
   }
 
   for (const updateType of KNOWN_UNSUPPORTED_UPDATE_TYPES) {
@@ -111,6 +143,7 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
     senderProfileUrl,
     sharedPhoneNumber: message.contact?.phone_number ?? null,
     sharedLocation: message.location ?? null,
+    businessConnectionId: message.business_connection_id ?? null,
   };
 
   return {

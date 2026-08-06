@@ -33,7 +33,8 @@ export class InstagramMessageSender implements MessageSender {
     this.interMessageDelayMs = options.interMessageDelayMs ?? DEFAULT_INTER_MESSAGE_DELAY_MS;
   }
 
-  async sendTyping(customerId: string): Promise<void> {
+  /** Instagram has no concept of any of RequestedInputOptions, so `_options` is a no-op here -- kept in the signature only to satisfy MessageSender. */
+  async sendTyping(customerId: string, _options?: RequestedInputOptions): Promise<void> {
     const recipientId = parseInstagramRecipientId(customerId);
     await this.transport.sendSenderAction(recipientId, "typing_on");
   }

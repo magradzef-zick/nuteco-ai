@@ -19,4 +19,6 @@ export interface NormalizedMessage {
   sharedPhoneNumber: string | null;
   /** Coordinates from a shared location. Telegram only -- null on every other platform and on any Telegram message that isn't a location share. */
   sharedLocation: { latitude: number; longitude: number } | null;
+  /** Set when this message belongs to a Telegram Business chat (Secretary Mode) -- must be echoed back on every reply in that chat, or Telegram rejects it. Telegram only; always null elsewhere. */
+  businessConnectionId: string | null;
 }

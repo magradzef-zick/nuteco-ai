@@ -27,6 +27,33 @@ test("sendTyping shows the typing indicator on the correct chat", async () => {
   assert.deepEqual(transport.calls, [{ method: "sendChatAction", chatId: 555, action: "typing" }]);
 });
 
+test("sendTyping forwards businessConnectionId to the transport (Telegram Business / Secretary Mode)", async () => {
+  const transport = new FakeTelegramTransport();
+  const sender = new TelegramMessageSender({ transport });
+
+  await sender.sendTyping("telegram:555", { businessConnectionId: "biz-conn-abc123" });
+
+  assert.deepEqual(transport.calls, [
+    { method: "sendChatAction", chatId: 555, action: "typing", businessConnectionId: "biz-conn-abc123" },
+  ]);
+});
+
+test("sendReply forwards businessConnectionId to every chunk, not just the last", async () => {
+  const transport = new FakeTelegramTransport();
+  const { sleep } = recordingSleep();
+  const sender = new TelegramMessageSender({ transport, sleep });
+
+  await sender.sendReply("telegram:555", ["First part.", "Second part."], { businessConnectionId: "biz-conn-abc123" });
+
+  const sendCalls = transport.calls.filter((c) => c.method === "sendMessage");
+  assert.equal(sendCalls.length, 2);
+  for (const call of sendCalls) {
+    if (call.method === "sendMessage") {
+      assert.equal(call.businessConnectionId, "biz-conn-abc123");
+    }
+  }
+});
+
 test("sendReply sends each message in order", async () => {
   const transport = new FakeTelegramTransport();
   const { sleep } = recordingSleep();

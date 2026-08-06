@@ -20,6 +20,31 @@ import { createLogger } from "../observability/logger";
  * the URL so Telegram includes it on every delivery (see
  * webhookRouter.ts's secret-token check).
  */
+
+/**
+ * Telegram Business (Secretary Mode) updates -- business_connection,
+ * business_message, edited_business_message -- are opt-in, unlike
+ * ordinary message updates: omitting `allowed_updates` gets everything
+ * else by default, but never these. Explicitly listing every type this
+ * project already handles (or deliberately no-ops, see
+ * parseUpdate.ts's KNOWN_UNSUPPORTED_UPDATE_TYPES) alongside them, so
+ * registering the webhook can't accidentally narrow what was already
+ * being delivered.
+ */
+const ALLOWED_UPDATES = [
+  "message",
+  "edited_message",
+  "channel_post",
+  "edited_channel_post",
+  "callback_query",
+  "inline_query",
+  "my_chat_member",
+  "chat_member",
+  "business_connection",
+  "business_message",
+  "edited_business_message",
+  "deleted_business_messages",
+];
 async function main(): Promise<void> {
   loadEnvIfPresent();
   const logger = createLogger();
@@ -42,7 +67,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const transport = new HttpTelegramTransport({ botToken: config.telegramBotToken, logger });
 
-  await transport.setWebhook(url, config.telegramWebhookSecretToken ?? undefined);
+  await transport.setWebhook(url, config.telegramWebhookSecretToken ?? undefined, ALLOWED_UPDATES);
 
   logger.info("registerWebhook.success", { url });
   console.log(`Webhook registered: ${url}`);

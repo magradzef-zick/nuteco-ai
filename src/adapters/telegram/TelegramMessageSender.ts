@@ -36,9 +36,9 @@ export class TelegramMessageSender implements MessageSender {
     this.interMessageDelayMs = options.interMessageDelayMs ?? DEFAULT_INTER_MESSAGE_DELAY_MS;
   }
 
-  async sendTyping(customerId: string): Promise<void> {
+  async sendTyping(customerId: string, options?: RequestedInputOptions): Promise<void> {
     const chatId = parseTelegramChatId(customerId);
-    await this.transport.sendChatAction(chatId, "typing");
+    await this.transport.sendChatAction(chatId, "typing", options?.businessConnectionId);
   }
 
   async sendReply(customerId: string, messages: string[], options?: RequestedInputOptions): Promise<void> {
@@ -54,9 +54,11 @@ export class TelegramMessageSender implements MessageSender {
       // The keyboard belongs on the last bubble -- attaching it to an
       // earlier one would show it, then Telegram would just leave it up
       // through the rest of the reply anyway, but semantically it's a
-      // reaction to the whole reply, not to one chunk of it.
+      // reaction to the whole reply, not to one chunk of it. The business
+      // connection id, in contrast, is per-call, not per-reply -- every
+      // chunk is its own Bot API request and needs it.
       const isLastChunk = i === allChunks.length - 1;
-      await this.transport.sendMessage(chatId, allChunks[i], isLastChunk ? replyMarkup : undefined);
+      await this.transport.sendMessage(chatId, allChunks[i], isLastChunk ? replyMarkup : undefined, options?.businessConnectionId);
     }
   }
 }

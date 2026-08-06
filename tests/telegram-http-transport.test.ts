@@ -73,6 +73,24 @@ test("sendMessage includes reply_markup when a keyboard is passed", async () => 
   assert.deepEqual(requests[0].body, { chat_id: 555, text: "Оставьте номер.", reply_markup: replyMarkup });
 });
 
+test("sendMessage includes business_connection_id when replying in a Telegram Business chat", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
+  const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
+
+  await transport.sendMessage(555, "Здравствуйте!", undefined, "biz-conn-abc123");
+
+  assert.deepEqual(requests[0].body, { chat_id: 555, text: "Здравствуйте!", business_connection_id: "biz-conn-abc123" });
+});
+
+test("sendChatAction includes business_connection_id when provided", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
+  const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
+
+  await transport.sendChatAction(555, "typing", "biz-conn-abc123");
+
+  assert.deepEqual(requests[0].body, { chat_id: 555, action: "typing", business_connection_id: "biz-conn-abc123" });
+});
+
 test("forwardMessage posts from_chat_id, chat_id, and message_id", async () => {
   const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
   const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
@@ -110,6 +128,18 @@ test("setWebhook includes the secret token when provided", async () => {
   assert.deepEqual(requests[0].body, {
     url: "https://example.com/telegram/webhook",
     secret_token: "s3cr3t",
+  });
+});
+
+test("setWebhook includes allowed_updates when provided (e.g. to opt in to Telegram Business updates)", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
+  const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
+
+  await transport.setWebhook("https://example.com/telegram/webhook", undefined, ["message", "business_message"]);
+
+  assert.deepEqual(requests[0].body, {
+    url: "https://example.com/telegram/webhook",
+    allowed_updates: ["message", "business_message"],
   });
 });
 

@@ -166,6 +166,13 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     // any other.
     const senderDisplayName = rawPayloads[0]?.senderDisplayName ?? null;
     const senderProfileUrl = rawPayloads[0]?.senderProfileUrl ?? null;
+    // Telegram Business (Secretary Mode) only: every reply to the customer
+    // in this batch must echo the same connection id the inbound message
+    // carried, or Telegram rejects the send. Undefined (not null) so it
+    // spreads cleanly into a MessageSender options object -- Telegram's
+    // own default, ordinary-chat behavior when omitted.
+    const businessConnectionId = rawPayloads[0]?.businessConnectionId ?? undefined;
+    const customerSendOptions = { businessConnectionId };
 
     // The most recent shared contact/location in *this* batch, if any --
     // merged with whatever the conversation already had on file once
@@ -191,7 +198,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         reason: "state_store_unavailable",
         error: (error as Error).message,
       });
-      await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)]);
+      await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)], customerSendOptions);
       await notifyManager(deps, {
         customerId,
         reason: "state_store_unavailable",
@@ -209,7 +216,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     if (textMessages.length === 0) {
       // Media-only batch: a deterministic answer exists, no LLM call needed.
       deps.logger.info("conversation.media_fallback", { customerId, mediaTypes: rawPayloads.map((p) => p.mediaType) });
-      await deps.messageSender.sendReply(customerId, [fallbackMessage("mediaFallback", language)]);
+      await deps.messageSender.sendReply(customerId, [fallbackMessage("mediaFallback", language)], customerSendOptions);
       return;
     }
 
@@ -224,7 +231,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         reason: "state_store_unavailable",
         error: (error as Error).message,
       });
-      await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)]);
+      await deps.messageSender.sendReply(customerId, [fallbackMessage("technicalHiccup", language)], customerSendOptions);
       await notifyManager(deps, {
         customerId,
         reason: "state_store_unavailable",
@@ -267,7 +274,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       escalated = true;
       escalationReason = "b2b_signal_detected";
     } else {
-      await deps.messageSender.sendTyping(customerId);
+      await deps.messageSender.sendTyping(customerId, customerSendOptions);
 
       const knowledgeBaseText = deps.getKnowledgeBaseText();
       const systemPrompt = `${deps.getSystemPromptText()}\n\n${knowledgeBaseText}`;
@@ -331,6 +338,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
 
     const requestedInput = detectRequestedInput(finalReplyText);
     await deps.messageSender.sendReply(customerId, splitIntoMessages(finalReplyText), {
+      ...customerSendOptions,
       requestContact: requestedInput.contact,
       requestLocation: requestedInput.location,
     });

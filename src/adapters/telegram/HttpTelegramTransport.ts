@@ -60,16 +60,26 @@ export class HttpTelegramTransport implements TelegramTransport {
     this.logger = options.logger ?? createLogger();
   }
 
-  async sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup): Promise<void> {
+  async sendMessage(
+    chatId: number,
+    text: string,
+    replyMarkup?: TelegramReplyKeyboardMarkup,
+    businessConnectionId?: string
+  ): Promise<void> {
     await this.callApi("sendMessage", {
       chat_id: chatId,
       text,
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      ...(businessConnectionId ? { business_connection_id: businessConnectionId } : {}),
     });
   }
 
-  async sendChatAction(chatId: number, action: "typing"): Promise<void> {
-    await this.callApi("sendChatAction", { chat_id: chatId, action });
+  async sendChatAction(chatId: number, action: "typing", businessConnectionId?: string): Promise<void> {
+    await this.callApi("sendChatAction", {
+      chat_id: chatId,
+      action,
+      ...(businessConnectionId ? { business_connection_id: businessConnectionId } : {}),
+    });
   }
 
   async getMe(): Promise<{ id: number; username: string | null }> {
@@ -77,10 +87,11 @@ export class HttpTelegramTransport implements TelegramTransport {
     return { id: result.id, username: result.username ?? null };
   }
 
-  async setWebhook(url: string, secretToken?: string): Promise<void> {
+  async setWebhook(url: string, secretToken?: string, allowedUpdates?: string[]): Promise<void> {
     await this.callApi("setWebhook", {
       url,
       ...(secretToken ? { secret_token: secretToken } : {}),
+      ...(allowedUpdates ? { allowed_updates: allowedUpdates } : {}),
     });
   }
 

@@ -10,12 +10,17 @@
  * src/storage/.
  */
 export interface TelegramTransport {
-  sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup): Promise<void>;
-  sendChatAction(chatId: number, action: "typing"): Promise<void>;
+  /**
+   * `businessConnectionId` must be the same id the inbound message carried
+   * (see NormalizedTelegramMessage.businessConnectionId) when replying in
+   * a Telegram Business chat -- omitted entirely for an ordinary chat.
+   */
+  sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup, businessConnectionId?: string): Promise<void>;
+  sendChatAction(chatId: number, action: "typing", businessConnectionId?: string): Promise<void>;
   /** Confirms the token is valid and returns the bot's own identity. Used only for startup validation. */
   getMe(): Promise<{ id: number; username: string | null }>;
   /** Registers (or re-registers) the webhook URL Telegram should deliver updates to. A one-time deployment step, not called per-message. */
-  setWebhook(url: string, secretToken?: string): Promise<void>;
+  setWebhook(url: string, secretToken?: string, allowedUpdates?: string[]): Promise<void>;
   /** Forwards an existing message (native rendering intact -- e.g. a shared location keeps its interactive map) from one chat to another. */
   forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void>;
 }

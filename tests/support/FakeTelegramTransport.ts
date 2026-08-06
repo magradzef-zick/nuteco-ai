@@ -1,10 +1,10 @@
 import type { TelegramTransport, TelegramReplyKeyboardMarkup } from "../../src/adapters/telegram/TelegramTransport";
 
 export type RecordedCall =
-  | { method: "sendMessage"; chatId: number; text: string; replyMarkup?: TelegramReplyKeyboardMarkup }
-  | { method: "sendChatAction"; chatId: number; action: "typing" }
+  | { method: "sendMessage"; chatId: number; text: string; replyMarkup?: TelegramReplyKeyboardMarkup; businessConnectionId?: string }
+  | { method: "sendChatAction"; chatId: number; action: "typing"; businessConnectionId?: string }
   | { method: "getMe" }
-  | { method: "setWebhook"; url: string; secretToken?: string }
+  | { method: "setWebhook"; url: string; secretToken?: string; allowedUpdates?: string[] }
   | { method: "forwardMessage"; toChatId: number; fromChatId: number; messageId: number };
 
 /**
@@ -19,12 +19,23 @@ export class FakeTelegramTransport implements TelegramTransport {
   getMeResult: { id: number; username: string | null } = { id: 1, username: "nuteco_test_bot" };
   getMeError: Error | null = null;
 
-  async sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup): Promise<void> {
-    this.calls.push({ method: "sendMessage", chatId, text, ...(replyMarkup ? { replyMarkup } : {}) });
+  async sendMessage(
+    chatId: number,
+    text: string,
+    replyMarkup?: TelegramReplyKeyboardMarkup,
+    businessConnectionId?: string
+  ): Promise<void> {
+    this.calls.push({
+      method: "sendMessage",
+      chatId,
+      text,
+      ...(replyMarkup ? { replyMarkup } : {}),
+      ...(businessConnectionId ? { businessConnectionId } : {}),
+    });
   }
 
-  async sendChatAction(chatId: number, action: "typing"): Promise<void> {
-    this.calls.push({ method: "sendChatAction", chatId, action });
+  async sendChatAction(chatId: number, action: "typing", businessConnectionId?: string): Promise<void> {
+    this.calls.push({ method: "sendChatAction", chatId, action, ...(businessConnectionId ? { businessConnectionId } : {}) });
   }
 
   async getMe(): Promise<{ id: number; username: string | null }> {
@@ -35,8 +46,8 @@ export class FakeTelegramTransport implements TelegramTransport {
     return this.getMeResult;
   }
 
-  async setWebhook(url: string, secretToken?: string): Promise<void> {
-    this.calls.push({ method: "setWebhook", url, secretToken });
+  async setWebhook(url: string, secretToken?: string, allowedUpdates?: string[]): Promise<void> {
+    this.calls.push({ method: "setWebhook", url, secretToken, ...(allowedUpdates ? { allowedUpdates } : {}) });
   }
 
   async forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void> {

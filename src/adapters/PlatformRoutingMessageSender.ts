@@ -16,8 +16,8 @@ export class PlatformRoutingMessageSender implements MessageSender {
     this.sendersByPlatform = new Map(Object.entries(sendersByPlatform));
   }
 
-  async sendTyping(customerId: string): Promise<void> {
-    await this.resolve(customerId).sendTyping(customerId);
+  async sendTyping(customerId: string, options?: RequestedInputOptions): Promise<void> {
+    await this.resolve(customerId).sendTyping(customerId, options);
   }
 
   async sendReply(customerId: string, messages: string[], options?: RequestedInputOptions): Promise<void> {

@@ -96,6 +96,72 @@ test("parses an edited message, flags it, and uses edit_date as the timestamp", 
   );
 });
 
+test("a Telegram Business (Secretary Mode) message is handled exactly like an ordinary message, plus its connection id", () => {
+  const update = {
+    update_id: 10,
+    business_message: {
+      message_id: 7,
+      date: 1_700_000_000,
+      chat: { id: 555 },
+      from: { id: 555, username: "gulnara_k" },
+      text: "Здравствуйте, а миндальная мука есть в наличии?",
+      business_connection_id: "biz-conn-abc123",
+    },
+  };
+
+  const result = parseUpdate(update);
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  assert.equal(result.message.customerId, "telegram:555");
+  assert.equal(result.message.messageId, "555:7");
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.text, "Здравствуйте, а миндальная мука есть в наличии?");
+  assert.equal(payload.businessConnectionId, "biz-conn-abc123");
+  assert.equal(payload.senderDisplayName, "@gulnara_k", "a business message still resolves the sender exactly like an ordinary one");
+});
+
+test("an edited Telegram Business message is flagged edited and keeps its connection id", () => {
+  const update = {
+    update_id: 11,
+    edited_business_message: {
+      message_id: 7,
+      date: 1_700_000_000,
+      edit_date: 1_700_000_050,
+      chat: { id: 555 },
+      text: "Corrected question",
+      business_connection_id: "biz-conn-abc123",
+    },
+  };
+
+  const result = parseUpdate(update);
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.isEdited, true);
+  assert.equal(payload.businessConnectionId, "biz-conn-abc123");
+});
+
+test("an ordinary (non-Business) message has no connection id", () => {
+  const result = parseUpdate(textMessageUpdate());
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+  assert.equal((result.message.payload as NormalizedTelegramMessage).businessConnectionId, null);
+});
+
+test("business_connection and deleted_business_messages are recognized as deliberately unhandled, not logged as an unknown update", () => {
+  assert.deepEqual(parseUpdate({ update_id: 12, business_connection: { id: "biz-conn-abc123" } }), {
+    kind: "unsupported",
+    updateType: "business_connection",
+  });
+  assert.deepEqual(parseUpdate({ update_id: 13, deleted_business_messages: { message_ids: [7] } }), {
+    kind: "unsupported",
+    updateType: "deleted_business_messages",
+  });
+});
+
 const mediaCases: Array<[string, Record<string, unknown>, string]> = [
   ["photo", { photo: [{ file_id: "abc" }] }, "photo"],
   ["voice", { voice: { duration: 3 } }, "voice"],

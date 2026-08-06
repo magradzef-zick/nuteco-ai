@@ -100,6 +100,38 @@ function locationMessage(customerId: string, messageId: string, latitude: number
   };
 }
 
+function businessMessage(customerId: string, messageId: string, text: string, businessConnectionId: string): InboundMessage {
+  return { customerId, messageId, sequence: 1, payload: { text, mediaType: null, businessConnectionId } };
+}
+
+test("a Telegram Business (Secretary Mode) message is answered through the exact same logic as an ordinary message, echoing its connection id on every reply", async () => {
+  const { handleMessages, transport, llmProvider } = setup(["Да, миндальная мука есть в наличии."]);
+
+  await handleMessages("telegram:50", [
+    businessMessage("telegram:50", "50:1", "Здравствуйте, а миндальная мука есть в наличии?", "biz-conn-abc123"),
+  ]);
+
+  assert.equal(llmProvider.requests.length, 1, "a business message must reach the LLM exactly like an ordinary one");
+
+  const typingCall = transport.calls.find((c) => c.method === "sendChatAction");
+  assert.ok(typingCall && typingCall.method === "sendChatAction");
+  assert.equal(typingCall.businessConnectionId, "biz-conn-abc123");
+
+  const replyCall = transport.calls.find((c) => c.method === "sendMessage");
+  assert.ok(replyCall && replyCall.method === "sendMessage");
+  assert.equal(replyCall.businessConnectionId, "biz-conn-abc123", "the reply must go out via the same business connection the message arrived on");
+});
+
+test("an ordinary (non-Business) Telegram message never carries a business_connection_id", async () => {
+  const { handleMessages, transport } = setup(["Almond flour is 150.000 per kg."]);
+
+  await handleMessages("telegram:51", [textMessage("telegram:51", "m1", "How much is almond flour?")]);
+
+  const replyCall = transport.calls.find((c) => c.method === "sendMessage");
+  assert.ok(replyCall && replyCall.method === "sendMessage");
+  assert.equal(replyCall.businessConnectionId, undefined);
+});
+
 test("answers a plain text message using the LLM, with the system prompt and knowledge base injected", async () => {
   const { handleMessages, transport, llmProvider } = setup(["Almond flour is 150.000 per kg."]);
 
