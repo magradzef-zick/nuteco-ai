@@ -72,6 +72,10 @@ export interface NormalizedInstagramMessage {
    */
   senderDisplayName: null;
   senderProfileUrl: null;
+  /** See NormalizedMessage.ts. Instagram has no contact-card concept -- always null. */
+  sharedPhoneNumber: null;
+  /** See NormalizedMessage.ts. Instagram has no location-share concept -- always null. */
+  sharedLocation: null;
 }
 
 /** Known Instagram messaging-event shapes this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap, matching telegram/parseUpdate.ts's KNOWN_UNSUPPORTED_UPDATE_TYPES convention. */
@@ -154,6 +158,8 @@ function toInboundMessage(event: InstagramMessagingEvent, message: InstagramMess
     timestamp: event.timestamp,
     senderDisplayName: null,
     senderProfileUrl: null,
+    sharedPhoneNumber: null,
+    sharedLocation: null,
   };
 
   return {

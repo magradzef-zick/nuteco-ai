@@ -59,6 +59,30 @@ test("sendMessage posts to the correct method URL with the chat id and text", as
   assert.deepEqual(requests[0].body, { chat_id: 555, text: "Hello!" });
 });
 
+test("sendMessage includes reply_markup when a keyboard is passed", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
+  const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
+  const replyMarkup = {
+    keyboard: [[{ text: "📞 Отправить номер", request_contact: true as const }]],
+    resize_keyboard: true as const,
+    one_time_keyboard: true as const,
+  };
+
+  await transport.sendMessage(555, "Оставьте номер.", replyMarkup);
+
+  assert.deepEqual(requests[0].body, { chat_id: 555, text: "Оставьте номер.", reply_markup: replyMarkup });
+});
+
+test("forwardMessage posts from_chat_id, chat_id, and message_id", async () => {
+  const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
+  const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });
+
+  await transport.forwardMessage(999, 555, 42);
+
+  assert.equal(requests[0].url, "https://api.telegram.org/botTEST:TOKEN/forwardMessage");
+  assert.deepEqual(requests[0].body, { chat_id: 999, from_chat_id: 555, message_id: 42 });
+});
+
 test("sendChatAction posts the typing action", async () => {
   const { fetchImpl, requests } = fakeFetch([okResponse(true)]);
   const transport = new HttpTelegramTransport({ botToken: "TEST:TOKEN", fetchImpl });

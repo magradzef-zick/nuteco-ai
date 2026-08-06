@@ -30,6 +30,7 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
   // awkward union type leaking into every existing test.
   const llmProvider = (llmProviderOverride ?? new FakeLlmProvider(scriptedReplies, truncatedIndices)) as FakeLlmProvider;
   const { logger, entries } = fakeLogger();
+  const forwardedMessages: Array<{ sourceMessageId: string; recipientId: string }> = [];
 
   let clock = 1_000_000;
   const handleMessages = createConversationEngine({
@@ -42,6 +43,9 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
     now: () => clock,
     logger,
     managerNotificationRecipientId: MANAGER_RECIPIENT_ID,
+    forwardMessageToRecipient: async (sourceMessageId, recipientId) => {
+      forwardedMessages.push({ sourceMessageId, recipientId });
+    },
   });
 
   return {
@@ -51,6 +55,7 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
     conversationStateRepository,
     llmProvider,
     logEntries: entries,
+    forwardedMessages,
     advanceClock: (ms: number) => (clock += ms),
   };
 }
@@ -70,6 +75,29 @@ function textMessageWithSender(
 
 function mediaMessage(customerId: string, messageId: string, mediaType: string): InboundMessage {
   return { customerId, messageId, sequence: 1, payload: { text: null, mediaType } };
+}
+
+function contactMessage(customerId: string, messageId: string, phoneNumber: string): InboundMessage {
+  return {
+    customerId,
+    messageId,
+    sequence: 1,
+    payload: { text: `📞 ${phoneNumber}`, mediaType: "contact", sharedPhoneNumber: phoneNumber, sharedLocation: null },
+  };
+}
+
+function locationMessage(customerId: string, messageId: string, latitude: number, longitude: number): InboundMessage {
+  return {
+    customerId,
+    messageId,
+    sequence: 1,
+    payload: {
+      text: `📍 ${latitude}, ${longitude}`,
+      mediaType: "location",
+      sharedPhoneNumber: null,
+      sharedLocation: { latitude, longitude },
+    },
+  };
 }
 
 test("answers a plain text message using the LLM, with the system prompt and knowledge base injected", async () => {
@@ -459,6 +487,81 @@ test("when the platform gave no sender info at all, the manager notification fal
   const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
   assert.ok(managerCall && managerCall.method === "sendMessage");
   assert.match(managerCall.text, /Клиент: telegram:35/);
+});
+
+test("a reply asking for the phone number attaches a Telegram 'share contact' keyboard to the customer's message", async () => {
+  const { handleMessages, transport } = setup(["Подскажите, пожалуйста, ваш номер телефона."]);
+
+  await handleMessages("telegram:40", [textMessage("telegram:40", "m1", "Хочу сделать заказ")]);
+
+  const customerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 40);
+  assert.ok(customerCall && customerCall.method === "sendMessage");
+  assert.deepEqual(customerCall.replyMarkup, {
+    keyboard: [[{ text: "📞 Отправить номер", request_contact: true }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  });
+});
+
+test("a reply asking for the delivery address attaches a Telegram 'share location' keyboard, and an ordinary reply attaches no keyboard", async () => {
+  const { handleMessages, transport } = setup(["Стоимость миндальной муки 150.000 сум за кг.", "Уточните адрес доставки."]);
+
+  await handleMessages("telegram:41", [textMessage("telegram:41", "m1", "Сколько стоит миндальная мука?")]);
+  await handleMessages("telegram:41", [textMessage("telegram:41", "m2", "Беру 2кг")]);
+
+  const customerCalls = transport.calls.filter((c) => c.method === "sendMessage" && c.chatId === 41);
+  assert.equal(customerCalls.length, 2);
+  if (customerCalls[0].method === "sendMessage") {
+    assert.equal(customerCalls[0].replyMarkup, undefined, "a plain price answer needs no keyboard");
+  }
+  if (customerCalls[1].method === "sendMessage") {
+    assert.deepEqual(customerCalls[1].replyMarkup, {
+      keyboard: [[{ text: "📍 Отправить геолокацию", request_location: true }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    });
+  }
+});
+
+test("a shared contact is not swallowed by the generic media fallback -- it reaches the LLM as a normal text turn", async () => {
+  const { handleMessages, llmProvider } = setup(["Спасибо, ваш номер получен."]);
+
+  await handleMessages("telegram:42", [contactMessage("telegram:42", "m1", "+998901234567")]);
+
+  assert.equal(llmProvider.requests.length, 1, "a contact share must reach the LLM, not the deterministic media_fallback path");
+  assert.match(llmProvider.requests[0].newUserMessage, /\+998901234567/);
+});
+
+test("a phone number shared several turns before handoff still reaches the manager notification when escalation finally happens", async () => {
+  const { handleMessages, transport } = setup([
+    "Спасибо, ваш номер получен.",
+    "Оплата картой или наличными?",
+    "Извините, я не могу подтвердить оплату -- передаю менеджеру.\n\n[ESCALATE]",
+  ]);
+
+  await handleMessages("telegram:43", [contactMessage("telegram:43", "m1", "+998901234567")]);
+  await handleMessages("telegram:43", [textMessage("telegram:43", "m2", "2кг миндальной муки")]);
+  await handleMessages("telegram:43", [textMessage("telegram:43", "m3", "Уже оплатил, проверьте")]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.match(managerCall.text, /Телефон: \+998901234567/, "the phone shared 2 turns earlier must still surface in the digest");
+});
+
+test("a shared location is forwarded natively to the manager (not described as text) once escalation happens, and the digest omits raw coordinates", async () => {
+  const { handleMessages, transport, forwardedMessages } = setup([
+    "Спасибо, локация получена.",
+    "Извините, передаю вас менеджеру.\n\n[ESCALATE]",
+  ]);
+
+  await handleMessages("telegram:44", [locationMessage("telegram:44", "44:m1", 41.311081, 69.279737)]);
+  await handleMessages("telegram:44", [textMessage("telegram:44", "m2", "Готово, что дальше?")]);
+
+  assert.deepEqual(forwardedMessages, [{ sourceMessageId: "44:m1", recipientId: MANAGER_RECIPIENT_ID }]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.doesNotMatch(managerCall.text, /41\.311081/, "coordinates belong in the forwarded native message, not restated as text");
 });
 
 test("the [ESCALATE] marker is only recognized at the very end of a reply, not anywhere it might coincidentally appear", async () => {

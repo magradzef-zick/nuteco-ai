@@ -20,8 +20,8 @@ interface TelegramMessage {
   video_note?: unknown;
   video?: unknown;
   sticker?: unknown;
-  location?: unknown;
-  contact?: unknown;
+  location?: { latitude: number; longitude: number };
+  contact?: { phone_number: string };
   document?: unknown;
 }
 
@@ -56,6 +56,10 @@ export interface NormalizedTelegramMessage {
   senderDisplayName: string | null;
   /** See NormalizedMessage.ts. Only ever set alongside senderDisplayName's "@username" form -- a bare first/last name yields no clickable link. */
   senderProfileUrl: string | null;
+  /** See NormalizedMessage.ts. Set only when this message is a shared contact card. */
+  sharedPhoneNumber: string | null;
+  /** See NormalizedMessage.ts. Set only when this message is a shared location. */
+  sharedLocation: { latitude: number; longitude: number } | null;
 }
 
 /** Known Telegram update fields this project deliberately does not act on yet -- listed so "unsupported" is a documented decision, not a silent gap. */
@@ -99,12 +103,14 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
     customerId,
     chatId,
     telegramMessageId: message.message_id,
-    text: message.text ?? null,
+    text: message.text ?? extractStructuredText(message),
     mediaType: detectMediaType(message),
     isEdited,
     timestamp: isEdited ? message.edit_date ?? message.date : message.date,
     senderDisplayName,
     senderProfileUrl,
+    sharedPhoneNumber: message.contact?.phone_number ?? null,
+    sharedLocation: message.location ?? null,
   };
 
   return {
@@ -128,6 +134,33 @@ function describeSender(from: TelegramMessage["from"]): { senderDisplayName: str
   }
   const name = [from?.first_name, from?.last_name].filter(Boolean).join(" ").trim();
   return { senderDisplayName: name.length > 0 ? name : null, senderProfileUrl: null };
+}
+
+/**
+ * A shared contact/location arrives as its own message type, not text --
+ * but the order-collection flow treats them as equivalent to typing the
+ * phone number or address (see system_prompt.md), so surface them as
+ * plain text the LLM can read too. Kept free of any RU/UZ/EN words so
+ * detectLanguage's word-count heuristic (languageDetector.ts) isn't
+ * skewed by which language the assistant happened to ask in.
+ */
+function extractStructuredText(message: TelegramMessage): string | null {
+  if (message.contact) {
+    return `📞 ${message.contact.phone_number}`;
+  }
+  if (message.location) {
+    return `📍 ${message.location.latitude}, ${message.location.longitude}`;
+  }
+  return null;
+}
+
+/** The inverse of `messageId = \`${chatId}:${message.message_id}\`` above -- used to forward a customer's original message (e.g. a shared location) by its raw Telegram identity. */
+export function parseTelegramMessageId(messageId: string): { chatId: number; telegramMessageId: number } {
+  const match = /^(-?\d+):(\d+)$/.exec(messageId);
+  if (!match) {
+    throw new Error(`"${messageId}" is not a valid Telegram message id (expected the form "<chatId>:<messageId>").`);
+  }
+  return { chatId: Number(match[1]), telegramMessageId: Number(match[2]) };
 }
 
 function detectMediaType(message: TelegramMessage): TelegramMediaType | null {

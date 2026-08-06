@@ -1,4 +1,4 @@
-import type { MessageSender } from "../MessageSender";
+import type { MessageSender, RequestedInputOptions } from "../MessageSender";
 import type { InstagramTransport } from "./InstagramTransport";
 
 /** Meta's documented hard limit on a single Messenger/Instagram message's text length -- exceeding this is rejected outright by the Graph API, not a stylistic choice. */
@@ -38,7 +38,8 @@ export class InstagramMessageSender implements MessageSender {
     await this.transport.sendSenderAction(recipientId, "typing_on");
   }
 
-  async sendReply(customerId: string, messages: string[]): Promise<void> {
+  /** Instagram has no quick-reply-keyboard concept, so `_options` is a no-op here -- kept in the signature only to satisfy MessageSender. */
+  async sendReply(customerId: string, messages: string[], _options?: RequestedInputOptions): Promise<void> {
     const recipientId = parseInstagramRecipientId(customerId);
 
     const allChunks = messages.flatMap((message) => splitForInstagramLimit(message));

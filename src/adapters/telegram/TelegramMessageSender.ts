@@ -1,5 +1,5 @@
-import type { MessageSender } from "../MessageSender";
-import type { TelegramTransport } from "./TelegramTransport";
+import type { MessageSender, RequestedInputOptions } from "../MessageSender";
+import type { TelegramTransport, TelegramReplyKeyboardMarkup } from "./TelegramTransport";
 
 /** Telegram's hard limit on a single message's text length -- exceeding this is rejected outright by the Bot API, not a stylistic choice. */
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
@@ -41,18 +41,41 @@ export class TelegramMessageSender implements MessageSender {
     await this.transport.sendChatAction(chatId, "typing");
   }
 
-  async sendReply(customerId: string, messages: string[]): Promise<void> {
+  async sendReply(customerId: string, messages: string[], options?: RequestedInputOptions): Promise<void> {
     const chatId = parseTelegramChatId(customerId);
 
     const allChunks = messages.flatMap((message) => splitForTelegramLimit(message));
+    const replyMarkup = buildReplyKeyboard(options);
 
     for (let i = 0; i < allChunks.length; i++) {
       if (i > 0) {
         await this.sleep(this.interMessageDelayMs);
       }
-      await this.transport.sendMessage(chatId, allChunks[i]);
+      // The keyboard belongs on the last bubble -- attaching it to an
+      // earlier one would show it, then Telegram would just leave it up
+      // through the rest of the reply anyway, but semantically it's a
+      // reaction to the whole reply, not to one chunk of it.
+      const isLastChunk = i === allChunks.length - 1;
+      await this.transport.sendMessage(chatId, allChunks[i], isLastChunk ? replyMarkup : undefined);
     }
   }
+}
+
+/** No keyboard at all when neither option is set, rather than an empty one. */
+function buildReplyKeyboard(options?: RequestedInputOptions): TelegramReplyKeyboardMarkup | undefined {
+  if (!options?.requestContact && !options?.requestLocation) {
+    return undefined;
+  }
+
+  const keyboard: TelegramReplyKeyboardMarkup["keyboard"] = [];
+  if (options.requestContact) {
+    keyboard.push([{ text: "📞 Отправить номер", request_contact: true }]);
+  }
+  if (options.requestLocation) {
+    keyboard.push([{ text: "📍 Отправить геолокацию", request_location: true }]);
+  }
+
+  return { keyboard, resize_keyboard: true, one_time_keyboard: true };
 }
 
 /** "telegram:123456789" -> 123456789. Throws clearly on any other shape rather than silently sending to the wrong chat. */

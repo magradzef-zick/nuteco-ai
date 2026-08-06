@@ -7,8 +7,8 @@ import { SqliteProcessedMessageStore } from "./storage/sqlite/SqliteProcessedMes
 import type { CustomerIdentityRepository } from "./storage/CustomerIdentityRepository";
 import type { ConversationStateRepository } from "./storage/ConversationStateRepository";
 import { HttpTelegramTransport } from "./adapters/telegram/HttpTelegramTransport";
-import { TelegramMessageSender } from "./adapters/telegram/TelegramMessageSender";
-import { parseUpdate } from "./adapters/telegram/parseUpdate";
+import { TelegramMessageSender, parseTelegramChatId } from "./adapters/telegram/TelegramMessageSender";
+import { parseUpdate, parseTelegramMessageId } from "./adapters/telegram/parseUpdate";
 import type { TelegramTransport } from "./adapters/telegram/TelegramTransport";
 import { HttpInstagramTransport } from "./adapters/instagram/HttpInstagramTransport";
 import { InstagramMessageSender } from "./adapters/instagram/InstagramMessageSender";
@@ -117,6 +117,16 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
     // made -- ConversationEngine itself treats this the same opaque way
     // it treats every customerId, never assuming or inspecting the format.
     managerNotificationRecipientId,
+    // Only Telegram messages ever reach ConversationEngine (Instagram is
+    // fully redirected, see instagramRedirectHandler.ts), and the manager
+    // chat is itself always Telegram -- so forwarding a shared location
+    // natively is just one Bot API call away, both ids parsed by the same
+    // helpers the rest of the Telegram adapter already uses.
+    forwardMessageToRecipient: async (sourceMessageId, recipientId) => {
+      const { chatId: fromChatId, telegramMessageId } = parseTelegramMessageId(sourceMessageId);
+      const toChatId = parseTelegramChatId(recipientId);
+      await transport.forwardMessage(toChatId, fromChatId, telegramMessageId);
+    },
   });
 
   const instagramHandleMessages = config.instagram

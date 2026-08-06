@@ -45,6 +45,25 @@ test("sendTyping routes the same way as sendReply", async () => {
   assert.deepEqual(instagramTransport.calls, [{ method: "sendSenderAction", recipientId: "123456", action: "typing_on" }]);
 });
 
+test("forwards requestContact/requestLocation options through to the resolved Telegram sender's keyboard", async () => {
+  const telegramTransport = new FakeTelegramTransport();
+  const sender = new PlatformRoutingMessageSender({
+    telegram: new TelegramMessageSender({ transport: telegramTransport }),
+  });
+
+  await sender.sendReply("telegram:555", ["Оставьте номер."], { requestContact: true });
+
+  const call = telegramTransport.calls[0];
+  assert.equal(call.method, "sendMessage");
+  if (call.method === "sendMessage") {
+    assert.deepEqual(call.replyMarkup, {
+      keyboard: [[{ text: "📞 Отправить номер", request_contact: true }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    });
+  }
+});
+
 test("throws a clear error for a platform with no registered sender", async () => {
   const sender = new PlatformRoutingMessageSender({
     telegram: new TelegramMessageSender({ transport: new FakeTelegramTransport() }),

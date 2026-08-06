@@ -9,6 +9,7 @@ import {
 import type { LlmProvider, LlmConversationTurn, LlmReplyResult } from "../llm/LlmProvider";
 import { checkForUnverifiedNumbers } from "./hallucinationGuardrail";
 import { detectStrongB2bSignal } from "./b2bDetector";
+import { detectRequestedInput } from "./requestedInputDetector";
 import { detectLanguage } from "./languageDetector";
 import { fallbackMessage } from "./fallbackMessages";
 import type { Logger } from "../observability/logger";
@@ -68,6 +69,18 @@ export interface ConversationEngineDependencies {
    * every customerId as opaque.
    */
   managerNotificationRecipientId: string;
+  /**
+   * Best-effort forward of a customer's original message (currently only
+   * ever a shared location) to another recipient, so the manager sees
+   * Telegram's native map view instead of a text reconstruction of the
+   * coordinates. `sourceMessageId` is the opaque id from
+   * `InboundMessage.messageId` -- platform-specific by nature (only
+   * Telegram implements this), so composition.ts wires it in and this
+   * stays the only place ConversationEngine touches it; omitted entirely
+   * on a platform/deployment with no such capability, in which case
+   * forwarding is silently skipped rather than attempted.
+   */
+  forwardMessageToRecipient?: (sourceMessageId: string, recipientId: string) => Promise<void>;
 }
 
 interface StoredHistory {
@@ -80,7 +93,7 @@ interface StoredHistory {
  * goes to staff, so the customer-language rule doesn't apply.
  */
 async function notifyManager(
-  deps: Pick<ConversationEngineDependencies, "messageSender" | "managerNotificationRecipientId" | "logger">,
+  deps: Pick<ConversationEngineDependencies, "messageSender" | "managerNotificationRecipientId" | "logger" | "forwardMessageToRecipient">,
   context: {
     customerId: string;
     reason: string;
@@ -88,6 +101,10 @@ async function notifyManager(
     /** Already resolved by the platform adapter (e.g. "@username" for Telegram) -- see NormalizedMessage.ts. Null when the platform gave nothing better than the raw id. */
     senderDisplayName: string | null;
     senderProfileUrl: string | null;
+    /** From orderDraft -- the phone number collected via a shared contact card anywhere in this conversation, if any. */
+    sharedPhoneNumber: string | null;
+    /** From orderDraft -- the id of the message holding a shared location, if any, forwarded natively rather than described as text. */
+    sharedLocationMessageId: string | null;
   }
 ): Promise<void> {
   // "@username (https://t.me/username)" when both are known; the display
@@ -103,6 +120,7 @@ async function notifyManager(
   const notificationText = [
     `Эскалация (${context.reason})`,
     `Клиент: ${clientLine}`,
+    ...(context.sharedPhoneNumber ? [`Телефон: ${context.sharedPhoneNumber}`] : []),
     `Сообщение: ${context.customerMessage}`,
   ].join("\n");
 
@@ -115,6 +133,17 @@ async function notifyManager(
       reason: context.reason,
       error: (error as Error).message,
     });
+  }
+
+  if (context.sharedLocationMessageId && deps.forwardMessageToRecipient) {
+    try {
+      await deps.forwardMessageToRecipient(context.sharedLocationMessageId, deps.managerNotificationRecipientId);
+    } catch (error) {
+      deps.logger.error("manager_notification.location_forward_failed", {
+        customerId: context.customerId,
+        error: (error as Error).message,
+      });
+    }
   }
 }
 
@@ -138,6 +167,19 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     const senderDisplayName = rawPayloads[0]?.senderDisplayName ?? null;
     const senderProfileUrl = rawPayloads[0]?.senderProfileUrl ?? null;
 
+    // The most recent shared contact/location in *this* batch, if any --
+    // merged with whatever the conversation already had on file once
+    // `state` is available below, so a phone shared several turns before
+    // handoff still reaches the manager notification.
+    const phoneNumbersInBatch = rawPayloads
+      .map((payload) => payload.sharedPhoneNumber)
+      .filter((phoneNumber): phoneNumber is string => typeof phoneNumber === "string");
+    const sharedPhoneInBatch = phoneNumbersInBatch.length > 0 ? phoneNumbersInBatch[phoneNumbersInBatch.length - 1] : null;
+
+    const locationMessagesInBatch = messages.filter((_, index) => Boolean(rawPayloads[index].sharedLocation));
+    const sharedLocationMessageIdInBatch =
+      locationMessagesInBatch.length > 0 ? locationMessagesInBatch[locationMessagesInBatch.length - 1].messageId : null;
+
     // Fail closed: an unreachable store means an honest escalation, not
     // silence and not a stateless reply that would quietly reproduce the
     // "forgets what was just said" failure of the earlier prototype.
@@ -156,6 +198,8 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         customerMessage: rawText,
         senderDisplayName,
         senderProfileUrl,
+        sharedPhoneNumber: sharedPhoneInBatch,
+        sharedLocationMessageId: sharedLocationMessageIdInBatch,
       });
       return;
     }
@@ -187,10 +231,28 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         customerMessage: combinedUserMessage,
         senderDisplayName,
         senderProfileUrl,
+        sharedPhoneNumber: sharedPhoneInBatch,
+        sharedLocationMessageId: sharedLocationMessageIdInBatch,
       });
       return;
     }
     const history = extractHistory(state?.variables);
+
+    // Carries a phone/location shared on an earlier turn forward to
+    // whichever later turn actually triggers the manager handoff -- the
+    // batch that says "готово" is rarely the same one that shared the
+    // contact card a few messages before.
+    const previousOrderDraft = state?.orderDraft ?? {};
+    const previousPhoneNumber = typeof previousOrderDraft.phoneNumber === "string" ? previousOrderDraft.phoneNumber : null;
+    const previousLocationMessageId =
+      typeof previousOrderDraft.locationMessageId === "string" ? previousOrderDraft.locationMessageId : null;
+    const sharedPhoneNumber = sharedPhoneInBatch ?? previousPhoneNumber;
+    const sharedLocationMessageId = sharedLocationMessageIdInBatch ?? previousLocationMessageId;
+    const orderDraft: Record<string, unknown> = {
+      ...previousOrderDraft,
+      ...(sharedPhoneNumber ? { phoneNumber: sharedPhoneNumber } : {}),
+      ...(sharedLocationMessageId ? { locationMessageId: sharedLocationMessageId } : {}),
+    };
 
     let finalReplyText: string;
     let escalated: boolean;
@@ -267,7 +329,11 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       }
     }
 
-    await deps.messageSender.sendReply(customerId, splitIntoMessages(finalReplyText));
+    const requestedInput = detectRequestedInput(finalReplyText);
+    await deps.messageSender.sendReply(customerId, splitIntoMessages(finalReplyText), {
+      requestContact: requestedInput.contact,
+      requestLocation: requestedInput.location,
+    });
 
     if (escalated && escalationReason !== null) {
       await notifyManager(deps, {
@@ -276,6 +342,8 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         customerMessage: combinedUserMessage,
         senderDisplayName,
         senderProfileUrl,
+        sharedPhoneNumber,
+        sharedLocationMessageId,
       });
     }
 
@@ -290,7 +358,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         {
           conversationId,
           currentIntent: state?.currentIntent ?? null,
-          orderDraft: state?.orderDraft ?? {},
+          orderDraft,
           currentStep: state?.currentStep ?? null,
           pendingClarification: state?.pendingClarification ?? null,
           escalationFlag: escalated,

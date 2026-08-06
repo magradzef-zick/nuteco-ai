@@ -26,6 +26,15 @@ test("sendTyping shows the typing_on sender action on the correct recipient", as
   assert.deepEqual(transport.calls, [{ method: "sendSenderAction", recipientId: "555", action: "typing_on" }]);
 });
 
+test("requestContact/requestLocation options are silently ignored -- Instagram has no quick-reply-keyboard concept", async () => {
+  const transport = new FakeInstagramTransport();
+  const sender = new InstagramMessageSender({ transport });
+
+  await sender.sendReply("instagram:555", ["hi"], { requestContact: true, requestLocation: true });
+
+  assert.deepEqual(transport.calls, [{ method: "sendMessage", recipientId: "555", text: "hi" }]);
+});
+
 test("sendReply sends each message in order", async () => {
   const transport = new FakeInstagramTransport();
   const { sleep } = recordingSleep();

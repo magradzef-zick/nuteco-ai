@@ -10,12 +10,27 @@
  * src/storage/.
  */
 export interface TelegramTransport {
-  sendMessage(chatId: number, text: string): Promise<void>;
+  sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup): Promise<void>;
   sendChatAction(chatId: number, action: "typing"): Promise<void>;
   /** Confirms the token is valid and returns the bot's own identity. Used only for startup validation. */
   getMe(): Promise<{ id: number; username: string | null }>;
   /** Registers (or re-registers) the webhook URL Telegram should deliver updates to. A one-time deployment step, not called per-message. */
   setWebhook(url: string, secretToken?: string): Promise<void>;
+  /** Forwards an existing message (native rendering intact -- e.g. a shared location keeps its interactive map) from one chat to another. */
+  forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void>;
+}
+
+/**
+ * Telegram's own `ReplyKeyboardMarkup` shape, restricted to the one-tap
+ * "share your contact/location" buttons this project uses -- not a
+ * general keyboard builder. `resize_keyboard` keeps it compact instead of
+ * full-screen; `one_time_keyboard` hides it again once the customer taps
+ * a button (or sends anything else), rather than sitting there forever.
+ */
+export interface TelegramReplyKeyboardMarkup {
+  keyboard: Array<Array<{ text: string; request_contact?: true; request_location?: true }>>;
+  resize_keyboard: true;
+  one_time_keyboard: true;
 }
 
 /**

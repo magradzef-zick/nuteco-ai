@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseUpdate, type NormalizedTelegramMessage } from "../src/adapters/telegram/parseUpdate";
+import { parseUpdate, parseTelegramMessageId, type NormalizedTelegramMessage } from "../src/adapters/telegram/parseUpdate";
 import type { InboundMessage } from "../src/engine/MessageDebouncer";
 
 function textMessageUpdate(overrides: Record<string, unknown> = {}) {
@@ -102,8 +102,6 @@ const mediaCases: Array<[string, Record<string, unknown>, string]> = [
   ["video_note", { video_note: { duration: 5 } }, "video_note"],
   ["video", { video: { duration: 10 } }, "video"],
   ["sticker", { sticker: { emoji: "😀" } }, "sticker"],
-  ["location", { location: { latitude: 1, longitude: 2 } }, "location"],
-  ["contact", { contact: { phone_number: "+998" } }, "contact"],
   ["document", { document: { file_name: "price-list.pdf" } }, "document"],
 ];
 
@@ -120,6 +118,34 @@ for (const [label, mediaField, expectedType] of mediaCases) {
     assert.equal(payload.text, null);
   });
 }
+
+test("a shared contact is surfaced as text (so the order-collection flow and hallucination guardrail can read it like any other message) and its raw phone number is kept structurally too", () => {
+  const update = textMessageUpdate({ text: undefined, contact: { phone_number: "+998901234567" } });
+  const result = parseUpdate(update);
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaType, "contact");
+  assert.equal(payload.text, "📞 +998901234567");
+  assert.equal(payload.sharedPhoneNumber, "+998901234567");
+  assert.equal(payload.sharedLocation, null);
+});
+
+test("a shared location is surfaced as text, and its raw coordinates are kept structurally too (for forwarding the original message natively)", () => {
+  const update = textMessageUpdate({ text: undefined, location: { latitude: 41.311081, longitude: 69.279737 } });
+  const result = parseUpdate(update);
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaType, "location");
+  assert.equal(payload.text, "📍 41.311081, 69.279737");
+  assert.deepEqual(payload.sharedLocation, { latitude: 41.311081, longitude: 69.279737 });
+  assert.equal(payload.sharedPhoneNumber, null);
+});
 
 test("a sticker sent alongside no text is not treated as an empty/broken message", () => {
   const update = textMessageUpdate({ text: undefined, sticker: { emoji: "👍" } });
@@ -142,4 +168,13 @@ test("reports a known-but-unhandled update type explicitly instead of silently d
 test("falls back to 'unknown' for a genuinely unrecognized update shape", () => {
   const result = parseUpdate({ update_id: 4, something_new_from_telegram: {} });
   assert.deepEqual(result, { kind: "unsupported", updateType: "unknown" });
+});
+
+test("parseTelegramMessageId is the exact inverse of the messageId parseUpdate constructs, including a negative group-chat id", () => {
+  assert.deepEqual(parseTelegramMessageId("555:42"), { chatId: 555, telegramMessageId: 42 });
+  assert.deepEqual(parseTelegramMessageId("-100123456789:7"), { chatId: -100123456789, telegramMessageId: 7 });
+});
+
+test("parseTelegramMessageId throws clearly on a malformed id", () => {
+  assert.throws(() => parseTelegramMessageId("not-a-message-id"), /not a valid Telegram message id/);
 });

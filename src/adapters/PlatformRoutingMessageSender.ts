@@ -1,4 +1,4 @@
-import type { MessageSender } from "./MessageSender";
+import type { MessageSender, RequestedInputOptions } from "./MessageSender";
 
 /**
  * Dispatches to the right platform-specific MessageSender based on the
@@ -20,8 +20,8 @@ export class PlatformRoutingMessageSender implements MessageSender {
     await this.resolve(customerId).sendTyping(customerId);
   }
 
-  async sendReply(customerId: string, messages: string[]): Promise<void> {
-    await this.resolve(customerId).sendReply(customerId, messages);
+  async sendReply(customerId: string, messages: string[], options?: RequestedInputOptions): Promise<void> {
+    await this.resolve(customerId).sendReply(customerId, messages, options);
   }
 
   private resolve(customerId: string): MessageSender {

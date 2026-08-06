@@ -15,4 +15,8 @@ export interface NormalizedMessage {
   senderDisplayName: string | null;
   /** A clickable link to the sender's profile, only ever set alongside `senderDisplayName` and only when the platform's own data made one constructible without an extra network call (e.g. a Telegram `@username` always yields a working `t.me` link; a bare first/last name does not). */
   senderProfileUrl: string | null;
+  /** The phone number from a shared contact card. Telegram only -- null on every other platform and on any Telegram message that isn't a contact share. */
+  sharedPhoneNumber: string | null;
+  /** Coordinates from a shared location. Telegram only -- null on every other platform and on any Telegram message that isn't a location share. */
+  sharedLocation: { latitude: number; longitude: number } | null;
 }

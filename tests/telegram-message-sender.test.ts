@@ -76,3 +76,60 @@ test("a message exceeding Telegram's length limit is split, not rejected", async
   assert.equal(sentTexts[1], "y".repeat(10));
   assert.equal(sentTexts.join(""), overLong, "no content should be lost by splitting");
 });
+
+test("neither option set attaches no keyboard at all", async () => {
+  const transport = new FakeTelegramTransport();
+  const sender = new TelegramMessageSender({ transport });
+
+  await sender.sendReply("telegram:555", ["Обычный ответ."], {});
+
+  assert.equal(transport.calls[0].method, "sendMessage");
+  assert.equal((transport.calls[0] as { replyMarkup?: unknown }).replyMarkup, undefined);
+});
+
+test("requestContact attaches a one-tap 'share your contact' keyboard to the last message", async () => {
+  const transport = new FakeTelegramTransport();
+  const { sleep } = recordingSleep();
+  const sender = new TelegramMessageSender({ transport, sleep });
+
+  await sender.sendReply("telegram:555", ["Первая часть.", "Оставьте, пожалуйста, номер."], { requestContact: true });
+
+  assert.equal((transport.calls[0] as { replyMarkup?: unknown }).replyMarkup, undefined, "not on the first bubble");
+  assert.deepEqual((transport.calls[1] as { replyMarkup?: unknown }).replyMarkup, {
+    keyboard: [[{ text: "📞 Отправить номер", request_contact: true }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  });
+});
+
+test("requestLocation attaches a one-tap 'share your location' keyboard", async () => {
+  const transport = new FakeTelegramTransport();
+  const sender = new TelegramMessageSender({ transport });
+
+  await sender.sendReply("telegram:555", ["Уточните адрес доставки."], { requestLocation: true });
+
+  assert.deepEqual((transport.calls[0] as { replyMarkup?: unknown }).replyMarkup, {
+    keyboard: [[{ text: "📍 Отправить геолокацию", request_location: true }]],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  });
+});
+
+test("both options set shows both buttons in one keyboard", async () => {
+  const transport = new FakeTelegramTransport();
+  const sender = new TelegramMessageSender({ transport });
+
+  await sender.sendReply("telegram:555", ["Локацию и номер получателя, пожалуйста."], {
+    requestContact: true,
+    requestLocation: true,
+  });
+
+  assert.deepEqual((transport.calls[0] as { replyMarkup?: unknown }).replyMarkup, {
+    keyboard: [
+      [{ text: "📞 Отправить номер", request_contact: true }],
+      [{ text: "📍 Отправить геолокацию", request_location: true }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+  });
+});

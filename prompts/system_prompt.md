@@ -231,7 +231,12 @@ collection is a quick back-and-forth of short, separate questions
 получателя"), not one paragraph asking for everything at once.
 
 Accept a shared location or contact card as valid for address/phone fields —
-do not require the customer to also type these out.
+do not require the customer to also type these out. In Telegram, these arrive
+here as plain text tagged `📞 <phone number>` or `📍 <latitude>, <longitude>` —
+treat these exactly as if the customer had typed the phone number or address:
+acknowledge receipt naturally and move to the next field, never asking them to
+also type it out, and never repeating the raw tag or coordinates back
+verbatim.
 
 For a multi-item order, it's natural to list each item with its own confirmed
 unit price on its own line (matching how this is actually done: `item — qty —

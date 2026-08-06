@@ -3,6 +3,7 @@ import {
   TelegramNetworkError,
   isRetryableApiError,
   type TelegramTransport,
+  type TelegramReplyKeyboardMarkup,
 } from "./TelegramTransport";
 import { callWithRetry, type AttemptResult } from "../../shared/retry";
 import { createLogger, type Logger } from "../../observability/logger";
@@ -59,8 +60,12 @@ export class HttpTelegramTransport implements TelegramTransport {
     this.logger = options.logger ?? createLogger();
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
-    await this.callApi("sendMessage", { chat_id: chatId, text });
+  async sendMessage(chatId: number, text: string, replyMarkup?: TelegramReplyKeyboardMarkup): Promise<void> {
+    await this.callApi("sendMessage", {
+      chat_id: chatId,
+      text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
   }
 
   async sendChatAction(chatId: number, action: "typing"): Promise<void> {
@@ -77,6 +82,10 @@ export class HttpTelegramTransport implements TelegramTransport {
       url,
       ...(secretToken ? { secret_token: secretToken } : {}),
     });
+  }
+
+  async forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void> {
+    await this.callApi("forwardMessage", { chat_id: toChatId, from_chat_id: fromChatId, message_id: messageId });
   }
 
   private async callApi(method: string, params: Record<string, unknown>): Promise<unknown> {
