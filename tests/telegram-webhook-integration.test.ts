@@ -7,11 +7,14 @@ import { MessageDebouncer } from "../src/engine/MessageDebouncer";
 import { InMemoryCustomerIdentityRepository } from "../src/storage/memory/InMemoryCustomerIdentityRepository";
 import { InMemoryConversationStateRepository } from "../src/storage/memory/InMemoryConversationStateRepository";
 import { createConversationEngine } from "../src/engine/ConversationEngine";
-import { TelegramMessageSender } from "../src/adapters/telegram/TelegramMessageSender";
+import { TelegramMessageSender, parseTelegramChatId } from "../src/adapters/telegram/TelegramMessageSender";
+import { parseTelegramMessageId } from "../src/adapters/telegram/parseUpdate";
 import { FakeTelegramTransport } from "./support/FakeTelegramTransport";
 import { FakeLlmProvider } from "./support/FakeLlmProvider";
 import { fakeLogger } from "./support/FakeLogger";
 import { handleIncomingTelegramUpdate } from "../src/composition";
+import { TelegramFileTooLargeError } from "../src/adapters/telegram/TelegramTransport";
+import { fallbackMessage } from "../src/engine/fallbackMessages";
 
 const TEST_SYSTEM_PROMPT = "You are the test assistant.";
 const TEST_KNOWLEDGE_BASE = "Almond flour costs 150.000 per kg.";
@@ -50,6 +53,14 @@ function setupServer(options: { secretToken?: string; now?: () => number } = {})
     now: () => 1_700_000_000_000,
     logger,
     managerNotificationRecipientId: "telegram:999999999",
+    // Both wired through the transport port exactly as composition.ts does
+    // -- including the same id-parsing helpers -- so the media path is
+    // exercised end-to-end rather than stubbed at the engine's edge.
+    forwardMessageToRecipient: async (sourceMessageId, recipientId) => {
+      const { chatId: fromChatId, telegramMessageId } = parseTelegramMessageId(sourceMessageId);
+      await transport.forwardMessage(parseTelegramChatId(recipientId), fromChatId, telegramMessageId);
+    },
+    downloadMedia: (fileId) => transport.downloadFile(fileId),
   });
 
   const webhookHandler = createTelegramWebhookHandler({
@@ -60,7 +71,7 @@ function setupServer(options: { secretToken?: string; now?: () => number } = {})
 
   const server = createServer(webhookHandler);
 
-  return { server, transport, identityRepository, logEntries };
+  return { server, transport, identityRepository, llmProvider, logEntries };
 }
 
 /** Fails the test loudly if anything logged an unexpected processing error -- the equivalent of the old "onProcessingError: throw" behavior, now expressed against the logger. */
@@ -80,6 +91,16 @@ function listen(server: Server): Promise<string> {
 
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
+}
+
+/**
+ * Lets the fire-and-forget `onUpdate` work finish before assertions run.
+ * A media message awaits a download *and* a model call after the 200 has
+ * already gone back to Telegram, so a single `setImmediate` -- enough for
+ * the text path -- would assert against a half-finished turn.
+ */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 function telegramTextUpdate(updateId: number, messageId: number, chatId: number, text: string, headers: Record<string, string> = {}) {
@@ -387,4 +408,112 @@ test("the same customer gets the AI's reply once working hours end, with no spec
     logger,
   });
   assert.ok(transport.calls.some((c) => c.method === "sendMessage"), "the same customer's later message, now after hours, reaches the agent");
+});
+
+test("a real voice message flows end-to-end: the webhook's file_id is resolved through the transport and the audio reaches the model", async () => {
+  const { server, transport, llmProvider, logEntries } = setupServer();
+  transport.downloadFileResult = { dataBase64: "T2dnUwACAA==", mimeType: "audio/ogg" };
+  const baseUrl = await listen(server);
+
+  try {
+    const response = await post(baseUrl, "/telegram/webhook", {
+      update_id: 1,
+      message: {
+        message_id: 100,
+        date: 1_700_000_000,
+        chat: { id: 777 },
+        voice: { file_id: "AwACAgIAAxkBAAI", duration: 4, mime_type: "audio/ogg", file_size: 12_345 },
+      },
+    });
+    assert.equal(response.status, 200);
+    await settle();
+
+    assert.ok(
+      transport.calls.some((c) => c.method === "downloadFile" && c.fileId === "AwACAgIAAxkBAAI"),
+      "the file_id Telegram sent in the webhook must be the one actually downloaded"
+    );
+    assert.equal(llmProvider.requests.length, 1);
+    assert.deepEqual(llmProvider.requests[0].attachments, [{ mimeType: "audio/ogg", dataBase64: "T2dnUwACAA==" }]);
+
+    const reply = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 777);
+    assert.ok(reply && reply.method === "sendMessage");
+    assert.equal(reply.text, TEST_LLM_REPLY, "the customer gets a real answer, not 'please send it as text'");
+
+    assertNoUnexpectedProcessingErrors(logEntries);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("a real photo-with-caption flows end-to-end: the largest rendering is fetched and the caption arrives as the question", async () => {
+  const { server, transport, llmProvider, logEntries } = setupServer();
+  transport.downloadFileResult = { dataBase64: "/9j/4AAQSkZJRg==", mimeType: "image/jpeg" };
+  const baseUrl = await listen(server);
+
+  try {
+    const response = await post(baseUrl, "/telegram/webhook", {
+      update_id: 2,
+      message: {
+        message_id: 101,
+        date: 1_700_000_000,
+        chat: { id: 778 },
+        caption: "это у вас есть?",
+        photo: [
+          { file_id: "small-thumb", file_size: 1_100 },
+          { file_id: "large-original", file_size: 210_000 },
+        ],
+      },
+    });
+    assert.equal(response.status, 200);
+    await settle();
+
+    assert.ok(transport.calls.some((c) => c.method === "downloadFile" && c.fileId === "large-original"));
+    assert.equal(llmProvider.requests[0].newUserMessage, "это у вас есть?");
+    assert.equal(llmProvider.requests[0].attachments?.[0].mimeType, "image/jpeg");
+
+    assertNoUnexpectedProcessingErrors(logEntries);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("a real oversized video flows end-to-end into an escalation, with the original forwarded to the manager", async () => {
+  const { server, transport, llmProvider, logEntries } = setupServer();
+  transport.downloadFileError = new TelegramFileTooLargeError(48 * 1024 * 1024);
+  const baseUrl = await listen(server);
+
+  try {
+    const response = await post(baseUrl, "/telegram/webhook", {
+      update_id: 3,
+      message: {
+        message_id: 102,
+        date: 1_700_000_000,
+        chat: { id: 779 },
+        video: { file_id: "huge-video", mime_type: "video/mp4", file_size: 48 * 1024 * 1024 },
+      },
+    });
+    assert.equal(response.status, 200);
+    await settle();
+
+    assert.equal(llmProvider.requests.length, 0);
+
+    const customerReply = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 779);
+    assert.ok(customerReply && customerReply.method === "sendMessage");
+    assert.equal(customerReply.text, fallbackMessage("mediaUnreadable", "ru"));
+
+    const managerReply = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+    assert.ok(managerReply && managerReply.method === "sendMessage", "the customer was promised a human, so one must actually be told");
+
+    const forward = transport.calls.find((c) => c.method === "forwardMessage");
+    assert.ok(forward && forward.method === "forwardMessage");
+    assert.deepEqual(
+      { toChatId: forward.toChatId, fromChatId: forward.fromChatId, messageId: forward.messageId },
+      { toChatId: 999999999, fromChatId: 779, messageId: 102 },
+      "the manager needs the video itself, not just a note that one arrived"
+    );
+
+    assertNoUnexpectedProcessingErrors(logEntries);
+  } finally {
+    await closeServer(server);
+  }
 });

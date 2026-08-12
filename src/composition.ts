@@ -127,6 +127,11 @@ export function buildDependencies(config: AppConfig, logger: Logger = createLogg
       const toChatId = parseTelegramChatId(recipientId);
       await transport.forwardMessage(toChatId, fromChatId, telegramMessageId);
     },
+    // Same reasoning as forwardMessageToRecipient above: only Telegram
+    // messages reach ConversationEngine, and only the Telegram adapter
+    // knows that a `mediaFileId` needs resolving through getFile before its
+    // bytes exist anywhere. The engine just gets bytes and a MIME type.
+    downloadMedia: (fileId) => transport.downloadFile(fileId),
   });
 
   const instagramHandleMessages = config.instagram

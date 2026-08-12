@@ -23,6 +23,56 @@ export interface TelegramTransport {
   setWebhook(url: string, secretToken?: string, allowedUpdates?: string[]): Promise<void>;
   /** Forwards an existing message (native rendering intact -- e.g. a shared location keeps its interactive map) from one chat to another. */
   forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void>;
+  /**
+   * Downloads the bytes behind a `file_id` (a voice message, photo,
+   * video, document) so they can be handed to the LLM. Telegram never
+   * puts the content itself in an update -- only an opaque id -- so this
+   * is a two-step call (`getFile` for the path, then a plain GET against
+   * the file host) that every media-reading path has to make.
+   *
+   * Throws TelegramFileTooLargeError above MAX_DOWNLOADABLE_FILE_BYTES,
+   * rather than returning an oversized payload the caller would have to
+   * re-check.
+   */
+  downloadFile(fileId: string): Promise<DownloadedFile>;
+}
+
+export interface DownloadedFile {
+  /** The file's bytes, base64-encoded -- the form every LLM provider's inline-data API expects. */
+  dataBase64: string;
+  /**
+   * From the file host's `Content-Type` response header, when it sent a
+   * usable one. Only a fallback: the inbound message's own `mime_type`
+   * (see parseUpdate.ts) is more trustworthy and is preferred by the
+   * caller. Null when the header was missing.
+   */
+  mimeType: string | null;
+}
+
+/**
+ * Two independent ceilings sit above this number, and it has to clear
+ * both: Telegram's Bot API refuses to serve `getFile` downloads over
+ * 20 MB at all, and Gemini caps a whole inline request at ~20 MB -- into
+ * which the same bytes go base64-encoded, i.e. ~33% larger than on disk.
+ * 15 MB is the largest round number that leaves room for that inflation
+ * plus the prompt and conversation history alongside it.
+ *
+ * A file over this is not an error to paper over: a phone video easily
+ * exceeds it, and there is no way to shrink one here. It escalates to a
+ * manager, who gets the original forwarded to them natively.
+ */
+export const MAX_DOWNLOADABLE_FILE_BYTES = 15 * 1024 * 1024;
+
+/** Thrown when a file exceeds MAX_DOWNLOADABLE_FILE_BYTES -- a normal, expected condition (a phone video), not a bug. Distinct from TelegramApiError so callers can tell "too big to read" from "Telegram rejected the request". */
+export class TelegramFileTooLargeError extends Error {
+  constructor(public readonly sizeBytes: number) {
+    super(
+      `Telegram file is ${Math.round(sizeBytes / 1024 / 1024)} MB, over the ${Math.round(
+        MAX_DOWNLOADABLE_FILE_BYTES / 1024 / 1024
+      )} MB limit this project can pass to the language model.`
+    );
+    this.name = "TelegramFileTooLargeError";
+  }
 }
 
 /**

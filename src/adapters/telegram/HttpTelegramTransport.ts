@@ -1,9 +1,12 @@
 import {
   TelegramApiError,
   TelegramNetworkError,
+  TelegramFileTooLargeError,
+  MAX_DOWNLOADABLE_FILE_BYTES,
   isRetryableApiError,
   type TelegramTransport,
   type TelegramReplyKeyboardMarkup,
+  type DownloadedFile,
 } from "./TelegramTransport";
 import { callWithRetry, type AttemptResult } from "../../shared/retry";
 import { createLogger, type Logger } from "../../observability/logger";
@@ -97,6 +100,71 @@ export class HttpTelegramTransport implements TelegramTransport {
 
   async forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void> {
     await this.callApi("forwardMessage", { chat_id: toChatId, from_chat_id: fromChatId, message_id: messageId });
+  }
+
+  /**
+   * Two calls, because that's how Telegram serves file content: `getFile`
+   * resolves a `file_id` into a temporary `file_path`, then the bytes come
+   * from a *different* host path -- `/file/bot<token>/<file_path>` rather
+   * than the `/bot<token>/<method>` the Bot API itself uses.
+   *
+   * Only the `getFile` half goes through `callApi`'s retry: re-downloading
+   * a multi-megabyte body on a network blip costs far more than it saves,
+   * and the caller already treats a failed download as an escalation
+   * rather than something to keep retrying at the customer's expense.
+   *
+   * Size is checked twice on purpose. `getFile`'s `file_size` lets an
+   * oversized file be rejected before a single byte is transferred, but
+   * Telegram documents that field as optional -- so the downloaded body is
+   * measured again, which is the only check that can't be skipped.
+   */
+  async downloadFile(fileId: string): Promise<DownloadedFile> {
+    const file = (await this.callApi("getFile", { file_id: fileId })) as { file_path?: string; file_size?: number };
+
+    if (file.file_size !== undefined && file.file_size > MAX_DOWNLOADABLE_FILE_BYTES) {
+      throw new TelegramFileTooLargeError(file.file_size);
+    }
+    if (!file.file_path) {
+      // Telegram returns this for files above its own 20 MB serving limit,
+      // among other cases -- there is no path to fetch, so there is nothing
+      // this method can do but say so plainly.
+      throw new TelegramApiError(`Telegram returned no file_path for file_id "${fileId}", so its content can't be downloaded.`, 400);
+    }
+
+    // Never logged anywhere: like every other URL in this class, it embeds
+    // the bot token.
+    const url = `${this.baseUrl}/file/bot${this.botToken}/${file.file_path}`;
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url);
+    } catch (cause) {
+      const error = new TelegramNetworkError(
+        `Network error downloading a Telegram file. This is usually a connectivity issue rather than a problem ` +
+          `with the request itself.`,
+        cause
+      );
+      this.logger.error("telegram_api.error", { method: "downloadFile", retryable: false, error: error.message });
+      throw error;
+    }
+
+    if (!response.ok) {
+      throw new TelegramApiError(`Downloading a Telegram file failed with status ${response.status}.`, response.status);
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_DOWNLOADABLE_FILE_BYTES) {
+      throw new TelegramFileTooLargeError(bytes.byteLength);
+    }
+
+    const contentType = response.headers.get("content-type");
+    return {
+      dataBase64: bytes.toString("base64"),
+      // A generic octet-stream header carries no information the caller
+      // doesn't already have from the message's own `mime_type`, so it's
+      // reported as "nothing useful" rather than passed on as if it were.
+      mimeType: contentType && contentType !== "application/octet-stream" ? contentType.split(";")[0].trim() : null,
+    };
   }
 
   private async callApi(method: string, params: Record<string, unknown>): Promise<unknown> {

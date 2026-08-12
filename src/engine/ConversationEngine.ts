@@ -6,7 +6,7 @@ import {
   DEFAULT_CONVERSATION_STATE_TTL_MS,
   type ConversationStateRepository,
 } from "../storage/ConversationStateRepository";
-import type { LlmProvider, LlmConversationTurn, LlmReplyResult } from "../llm/LlmProvider";
+import type { LlmProvider, LlmConversationTurn, LlmReplyResult, LlmAttachment } from "../llm/LlmProvider";
 import { checkForUnverifiedNumbers } from "./hallucinationGuardrail";
 import { detectStrongB2bSignal } from "./b2bDetector";
 import { detectRequestedInput } from "./requestedInputDetector";
@@ -34,6 +34,15 @@ import type { Logger } from "../observability/logger";
 
 /** Bounded so conversation history contributes a roughly stable, small amount to every prompt -- not unlimited memory. */
 const MAX_HISTORY_TURNS = 20;
+
+/**
+ * A customer who fires off five photos in a row is describing one thing,
+ * not asking five questions -- and every attachment is paid for twice, in
+ * download time the customer waits through and in tokens. Extras beyond
+ * this are dropped (and logged as dropped, never silently), on the
+ * assumption that the first few carry the question.
+ */
+const MAX_ATTACHMENTS_PER_TURN = 3;
 
 /** Appended by the model when its own judgment says this turn needs a human. Stripped before sending. */
 const ESCALATION_MARKER = "[ESCALATE]";
@@ -81,6 +90,19 @@ export interface ConversationEngineDependencies {
    * forwarding is silently skipped rather than attempted.
    */
   forwardMessageToRecipient?: (sourceMessageId: string, recipientId: string) => Promise<void>;
+  /**
+   * Fetches the bytes behind a `NormalizedMessage.mediaFileId` so a voice
+   * message or photo can be handed to the model. Platform-specific by
+   * nature (Telegram's two-step getFile/download dance), so composition.ts
+   * wires it in and this stays the only place ConversationEngine touches
+   * it -- the same arrangement as `forwardMessageToRecipient` above.
+   *
+   * Omitted entirely on a platform that can't do this, in which case media
+   * messages fall back to asking the customer for text, exactly as they
+   * did before any of this existed. `mimeType` is null when the platform
+   * gave no usable one; the caller prefers the inbound message's own.
+   */
+  downloadMedia?: (fileId: string) => Promise<{ dataBase64: string; mimeType: string | null }>;
 }
 
 interface StoredHistory {
@@ -103,8 +125,16 @@ async function notifyManager(
     senderProfileUrl: string | null;
     /** From orderDraft -- the phone number collected via a shared contact card anywhere in this conversation, if any. */
     sharedPhoneNumber: string | null;
-    /** From orderDraft -- the id of the message holding a shared location, if any, forwarded natively rather than described as text. */
-    sharedLocationMessageId: string | null;
+    /**
+     * The customer's own message to forward alongside this notification --
+     * a voice message or photo the assistant couldn't handle, or a shared
+     * location. Forwarded rather than described because Telegram renders
+     * all three natively (a playable voice message, the photo itself, an
+     * interactive map) and no text reconstruction comes close. Null when
+     * there's nothing but text, in which case the notification already
+     * contains everything.
+     */
+    forwardSourceMessageId: string | null;
   }
 ): Promise<void> {
   // "@username (https://t.me/username)" when both are known; the display
@@ -135,11 +165,11 @@ async function notifyManager(
     });
   }
 
-  if (context.sharedLocationMessageId && deps.forwardMessageToRecipient) {
+  if (context.forwardSourceMessageId && deps.forwardMessageToRecipient) {
     try {
-      await deps.forwardMessageToRecipient(context.sharedLocationMessageId, deps.managerNotificationRecipientId);
+      await deps.forwardMessageToRecipient(context.forwardSourceMessageId, deps.managerNotificationRecipientId);
     } catch (error) {
-      deps.logger.error("manager_notification.location_forward_failed", {
+      deps.logger.error("manager_notification.forward_failed", {
         customerId: context.customerId,
         error: (error as Error).message,
       });
@@ -187,6 +217,20 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     const sharedLocationMessageIdInBatch =
       locationMessagesInBatch.length > 0 ? locationMessagesInBatch[locationMessagesInBatch.length - 1].messageId : null;
 
+    // Which messages in this batch carry a file worth reading, and whether
+    // this deployment can actually read one (see deps.downloadMedia). Both
+    // are needed before the media check below, which decides between
+    // answering the file and asking for text.
+    // Truthiness, not `!== null`: a payload that simply omits the field
+    // arrives as `undefined`, which `!== null` waves through -- and a
+    // "media message" with no file id then makes every escalation forward
+    // the wrong message. Same reason the empty string can't be a valid id.
+    const mediaIndexes = rawPayloads
+      .map((payload, index) => (payload.mediaFileId ? index : -1))
+      .filter((index) => index !== -1);
+    const canReadMedia = mediaIndexes.length > 0 && deps.downloadMedia !== undefined;
+    const lastMediaMessageId = mediaIndexes.length > 0 ? messages[mediaIndexes[mediaIndexes.length - 1]].messageId : null;
+
     // Fail closed: an unreachable store means an honest escalation, not
     // silence and not a stateless reply that would quietly reproduce the
     // "forgets what was just said" failure of the earlier prototype.
@@ -206,21 +250,28 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         senderDisplayName,
         senderProfileUrl,
         sharedPhoneNumber: sharedPhoneInBatch,
-        sharedLocationMessageId: sharedLocationMessageIdInBatch,
+        forwardSourceMessageId: lastMediaMessageId ?? sharedLocationMessageIdInBatch,
       });
       return;
     }
 
-    const textMessages = rawPayloads.filter((payload) => payload.text !== null && payload.text.trim().length > 0);
+    const hasText = rawText.trim().length > 0;
 
-    if (textMessages.length === 0) {
-      // Media-only batch: a deterministic answer exists, no LLM call needed.
+    if (!hasText && !canReadMedia) {
+      // Nothing to answer and nothing readable to answer *from*: a sticker,
+      // or a platform whose adapter can't download attachments. A
+      // deterministic answer exists, no LLM call needed.
       deps.logger.info("conversation.media_fallback", { customerId, mediaTypes: rawPayloads.map((p) => p.mediaType) });
       await deps.messageSender.sendReply(customerId, [fallbackMessage("mediaFallback", language)], customerSendOptions);
       return;
     }
 
-    const combinedUserMessage = rawText;
+    // A voice message or an uncaptioned photo has no text of its own, but
+    // the model still needs a turn to answer -- the file goes in as an
+    // attachment and this stands in for the words the customer didn't
+    // type. It is also what the manager sees in an escalation and what
+    // history keeps, both of which read correctly as a description.
+    const combinedUserMessage = hasText ? rawText : describeAttachments(rawPayloads);
 
     let state: Awaited<ReturnType<ConversationStateRepository["get"]>>;
     try {
@@ -239,7 +290,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         senderDisplayName,
         senderProfileUrl,
         sharedPhoneNumber: sharedPhoneInBatch,
-        sharedLocationMessageId: sharedLocationMessageIdInBatch,
+        forwardSourceMessageId: lastMediaMessageId ?? sharedLocationMessageIdInBatch,
       });
       return;
     }
@@ -261,6 +312,59 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       ...(sharedLocationMessageId ? { locationMessageId: sharedLocationMessageId } : {}),
     };
 
+    // Whichever of the customer's own messages a manager would need to see
+    // if this turn escalates. Media outranks a location: when the file is
+    // what the assistant couldn't handle, the file is what a human has to
+    // look at.
+    const forwardSourceMessageId = lastMediaMessageId ?? sharedLocationMessageId;
+
+    // Downloaded before the branch below rather than inside it, because
+    // whether this succeeded is itself one of the branch conditions.
+    const attachments: LlmAttachment[] = [];
+    let mediaFailed = false;
+
+    if (canReadMedia) {
+      // Downloading several megabytes takes real time, and the customer is
+      // sitting there -- show the indicator before it starts, not after.
+      await deps.messageSender.sendTyping(customerId, customerSendOptions);
+
+      if (mediaIndexes.length > MAX_ATTACHMENTS_PER_TURN) {
+        deps.logger.info("conversation.media_truncated", {
+          customerId,
+          received: mediaIndexes.length,
+          attached: MAX_ATTACHMENTS_PER_TURN,
+        });
+      }
+
+      for (const index of mediaIndexes.slice(0, MAX_ATTACHMENTS_PER_TURN)) {
+        const payload = rawPayloads[index];
+        try {
+          const file = await deps.downloadMedia!(payload.mediaFileId!);
+          attachments.push({
+            // The message's own MIME type is the most reliable: it comes
+            // from Telegram's own record of the file, while the transport's
+            // is only what the file host's Content-Type header happened to
+            // say. The last resort lets the model sniff the bytes rather
+            // than refusing outright.
+            mimeType: payload.mediaMimeType ?? file.mimeType ?? "application/octet-stream",
+            dataBase64: file.dataBase64,
+          });
+        } catch (error) {
+          // Expected, not exceptional: a file over the size limit, an
+          // unsupported format, a failed download. The whole turn escalates
+          // rather than answering from a partial view of what was sent.
+          deps.logger.error("escalation.triggered", {
+            customerId,
+            reason: "media_unreadable",
+            mediaType: payload.mediaType,
+            error: (error as Error).message,
+          });
+          mediaFailed = true;
+          break;
+        }
+      }
+    }
+
     let finalReplyText: string;
     let escalated: boolean;
     let escalationReason: string | null;
@@ -273,6 +377,14 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       finalReplyText = fallbackMessage("b2bEscalation", language);
       escalated = true;
       escalationReason = "b2b_signal_detected";
+    } else if (mediaFailed) {
+      // Already logged at the point of failure above. The customer is told
+      // a human is picking it up, and the manager notification below
+      // forwards the original file so they actually have something to look
+      // at.
+      finalReplyText = fallbackMessage("mediaUnreadable", language);
+      escalated = true;
+      escalationReason = "media_unreadable";
     } else {
       await deps.messageSender.sendTyping(customerId, customerSendOptions);
 
@@ -285,6 +397,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
           systemPrompt,
           historyTurns: history,
           newUserMessage: combinedUserMessage,
+          ...(attachments.length > 0 ? { attachments } : {}),
         });
       } catch (error) {
         // An unreachable LLM is expected, not a bug. `reply` staying null
@@ -351,7 +464,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         senderDisplayName,
         senderProfileUrl,
         sharedPhoneNumber,
-        sharedLocationMessageId,
+        forwardSourceMessageId,
       });
     }
 
@@ -406,6 +519,38 @@ function splitIntoMessages(text: string): string[] {
   const head = segments.slice(0, MAX_MESSAGE_SEGMENTS - 1);
   const tail = segments.slice(MAX_MESSAGE_SEGMENTS - 1).join("\n\n");
   return [...head, tail];
+}
+
+/**
+ * Covers both adapters' vocabularies (Telegram's "photo"/"voice",
+ * Instagram's "image"/"audio") in one map rather than asking the engine to
+ * know which platform a message came from -- the same reason
+ * `NormalizedMessage.mediaType` is a plain string here and not a
+ * platform-specific union.
+ */
+const MEDIA_DESCRIPTIONS: Record<string, string> = {
+  photo: "фото",
+  image: "фото",
+  voice: "голосовое сообщение",
+  audio: "аудио",
+  video: "видео",
+  video_note: "видеосообщение",
+  document: "файл",
+  file: "файл",
+};
+
+/**
+ * Stands in for the message text on a batch that has none -- a voice
+ * message, an uncaptioned photo. Written in Russian, matching
+ * detectLanguage's own default for textless input: with no words to go on
+ * there is no language signal to follow, and a voice message carries its
+ * language in the audio itself, which the model hears directly.
+ */
+function describeAttachments(payloads: NormalizedMessage[]): string {
+  const labels = payloads
+    .filter((payload) => payload.mediaFileId)
+    .map((payload) => MEDIA_DESCRIPTIONS[payload.mediaType ?? ""] ?? "вложение");
+  return `[Клиент прислал ${labels.join(", ")} без текста — ответьте по содержимому вложения]`;
 }
 
 function extractHistory(variables: Record<string, unknown> | undefined): LlmConversationTurn[] {

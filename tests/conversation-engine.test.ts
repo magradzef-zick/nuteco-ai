@@ -18,7 +18,12 @@ const KNOWLEDGE_BASE = "Almond flour costs 150.000 per kg.";
 
 const MANAGER_RECIPIENT_ID = "telegram:999999999";
 
-function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmProviderOverride?: LlmProvider) {
+function setup(
+  scriptedReplies: string[],
+  truncatedIndices: number[] = [],
+  llmProviderOverride?: LlmProvider,
+  downloadMediaOverride?: (fileId: string) => Promise<{ dataBase64: string; mimeType: string | null }>
+) {
   const transport = new FakeTelegramTransport();
   const messageSender = new TelegramMessageSender({ transport, sleep: async () => {} });
   const identityRepository = new InMemoryCustomerIdentityRepository();
@@ -31,6 +36,7 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
   const llmProvider = (llmProviderOverride ?? new FakeLlmProvider(scriptedReplies, truncatedIndices)) as FakeLlmProvider;
   const { logger, entries } = fakeLogger();
   const forwardedMessages: Array<{ sourceMessageId: string; recipientId: string }> = [];
+  const downloadedFileIds: string[] = [];
 
   let clock = 1_000_000;
   const handleMessages = createConversationEngine({
@@ -46,6 +52,16 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
     forwardMessageToRecipient: async (sourceMessageId, recipientId) => {
       forwardedMessages.push({ sourceMessageId, recipientId });
     },
+    // Always wired, mirroring the real Telegram deployment. It only ever
+    // fires for a payload that actually carries a `mediaFileId`, so every
+    // pre-existing test (whose fixtures don't) is unaffected.
+    downloadMedia: async (fileId) => {
+      downloadedFileIds.push(fileId);
+      if (downloadMediaOverride) {
+        return downloadMediaOverride(fileId);
+      }
+      return { dataBase64: `bytes-of-${fileId}`, mimeType: null };
+    },
   });
 
   return {
@@ -56,6 +72,7 @@ function setup(scriptedReplies: string[], truncatedIndices: number[] = [], llmPr
     llmProvider,
     logEntries: entries,
     forwardedMessages,
+    downloadedFileIds,
     advanceClock: (ms: number) => (clock += ms),
   };
 }
@@ -73,8 +90,28 @@ function textMessageWithSender(
   return { customerId, messageId, sequence: 1, payload: { text, mediaType: null, ...sender } };
 }
 
+/** Media with nothing downloadable behind it -- a sticker, or any platform whose adapter can't fetch attachments. */
 function mediaMessage(customerId: string, messageId: string, mediaType: string): InboundMessage {
   return { customerId, messageId, sequence: 1, payload: { text: null, mediaType } };
+}
+
+/** Media the adapter *can* fetch: a voice message, a photo, a document. `text` is the caption, if any. */
+function attachmentMessage(
+  customerId: string,
+  messageId: string,
+  attachment: { mediaType: string; mediaFileId: string; mediaMimeType?: string | null; text?: string | null }
+): InboundMessage {
+  return {
+    customerId,
+    messageId,
+    sequence: 1,
+    payload: {
+      text: attachment.text ?? null,
+      mediaType: attachment.mediaType,
+      mediaFileId: attachment.mediaFileId,
+      mediaMimeType: attachment.mediaMimeType ?? null,
+    },
+  };
 }
 
 function contactMessage(customerId: string, messageId: string, phoneNumber: string): InboundMessage {
@@ -697,4 +734,126 @@ test("history is bounded so it doesn't grow without limit", async () => {
 
   const lastRequest = llmProvider.requests[llmProvider.requests.length - 1];
   assert.ok(lastRequest.historyTurns.length <= 20, "history must stay bounded, not grow forever");
+});
+
+test("a voice message with no text reaches the LLM as an attachment, instead of being answered with 'send it as text'", async () => {
+  const { handleMessages, transport, llmProvider, downloadedFileIds } = setup(["Да, миндальная мука есть в наличии."]);
+
+  await handleMessages("telegram:50", [
+    attachmentMessage("telegram:50", "50:m1", { mediaType: "voice", mediaFileId: "voice-abc", mediaMimeType: "audio/ogg" }),
+  ]);
+
+  assert.deepEqual(downloadedFileIds, ["voice-abc"]);
+  assert.equal(llmProvider.requests.length, 1, "a voice message must reach the model, not the deterministic media fallback");
+  assert.deepEqual(llmProvider.requests[0].attachments, [{ mimeType: "audio/ogg", dataBase64: "bytes-of-voice-abc" }]);
+
+  const customerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 50);
+  assert.ok(customerCall && customerCall.method === "sendMessage");
+  assert.equal(customerCall.text, "Да, миндальная мука есть в наличии.");
+});
+
+test("a photo's caption is the customer's question -- it reaches the model as the turn's text, alongside the image", async () => {
+  const { handleMessages, llmProvider } = setup(["Да, это наш миндаль."]);
+
+  await handleMessages("telegram:51", [
+    attachmentMessage("telegram:51", "51:m1", {
+      mediaType: "photo",
+      mediaFileId: "photo-abc",
+      mediaMimeType: "image/jpeg",
+      text: "это у вас есть?",
+    }),
+  ]);
+
+  assert.equal(llmProvider.requests[0].newUserMessage, "это у вас есть?");
+  assert.deepEqual(llmProvider.requests[0].attachments, [{ mimeType: "image/jpeg", dataBase64: "bytes-of-photo-abc" }]);
+});
+
+test("an uncaptioned attachment still gets a turn the model can answer, described rather than left blank", async () => {
+  const { handleMessages, llmProvider } = setup(["Это наш миндаль, 150.000 сум за кг."]);
+
+  await handleMessages("telegram:52", [
+    attachmentMessage("telegram:52", "52:m1", { mediaType: "photo", mediaFileId: "photo-xyz", mediaMimeType: "image/jpeg" }),
+  ]);
+
+  assert.match(llmProvider.requests[0].newUserMessage, /фото/, "the placeholder must name what was actually sent");
+  assert.equal(llmProvider.requests[0].attachments?.length, 1);
+});
+
+test("a file that can't be read escalates to a manager and forwards the original, rather than asking the customer to retype it", async () => {
+  const { handleMessages, transport, llmProvider, forwardedMessages } = setup(["unused"], [], undefined, async () => {
+    throw new Error("Telegram file is 48 MB, over the 15 MB limit this project can pass to the language model.");
+  });
+
+  await handleMessages("telegram:53", [
+    attachmentMessage("telegram:53", "53:m1", { mediaType: "video", mediaFileId: "video-huge", mediaMimeType: "video/mp4" }),
+  ]);
+
+  assert.equal(llmProvider.requests.length, 0, "an unreadable file must never reach the model with the attachment silently missing");
+
+  const customerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 53);
+  assert.ok(customerCall && customerCall.method === "sendMessage");
+  assert.equal(customerCall.text, fallbackMessage("mediaUnreadable", "ru"));
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage", "a manager must be told, since the customer was promised a human");
+  assert.match(managerCall.text, /media_unreadable/);
+
+  assert.deepEqual(
+    forwardedMessages,
+    [{ sourceMessageId: "53:m1", recipientId: MANAGER_RECIPIENT_ID }],
+    "the manager needs the file itself -- a notification about a video they can't see is useless"
+  );
+});
+
+test("a media message that escalates for an unrelated reason still forwards the file to the manager", async () => {
+  const { handleMessages, forwardedMessages } = setup(["Передаю менеджеру.\n\n[ESCALATE]"]);
+
+  await handleMessages("telegram:54", [
+    attachmentMessage("telegram:54", "54:m1", { mediaType: "photo", mediaFileId: "photo-esc", text: "что это?" }),
+  ]);
+
+  assert.deepEqual(forwardedMessages, [{ sourceMessageId: "54:m1", recipientId: MANAGER_RECIPIENT_ID }]);
+});
+
+test("a burst of attachments is capped rather than sent whole, and what was dropped is logged instead of silently discarded", async () => {
+  const { handleMessages, llmProvider, downloadedFileIds, logEntries } = setup(["Вижу, это наши продукты."]);
+
+  await handleMessages(
+    "telegram:55",
+    ["a", "b", "c", "d", "e"].map((suffix) =>
+      attachmentMessage("telegram:55", `55:${suffix}`, { mediaType: "photo", mediaFileId: `photo-${suffix}` })
+    )
+  );
+
+  assert.equal(downloadedFileIds.length, 3, "downloading every photo of a five-photo burst costs the customer real waiting time");
+  assert.equal(llmProvider.requests[0].attachments?.length, 3);
+  assert.ok(
+    logEntries.some((entry) => entry.event === "conversation.media_truncated"),
+    "dropping input silently would read as 'the model saw everything' when it didn't"
+  );
+});
+
+test("a sticker still gets the plain 'describe it in text' reply -- there is nothing in it worth a model call", async () => {
+  const { handleMessages, transport, llmProvider, downloadedFileIds } = setup(["unused"]);
+
+  await handleMessages("telegram:56", [mediaMessage("telegram:56", "56:m1", "sticker")]);
+
+  assert.equal(downloadedFileIds.length, 0);
+  assert.equal(llmProvider.requests.length, 0);
+  const customerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 56);
+  assert.ok(customerCall && customerCall.method === "sendMessage");
+  assert.equal(customerCall.text, fallbackMessage("mediaFallback", "ru"));
+});
+
+test("the message's own MIME type wins over whatever the file host's header claimed", async () => {
+  const { handleMessages, llmProvider } = setup(["Понял."], [], undefined, async () => ({
+    dataBase64: "bytes",
+    mimeType: "application/octet-stream",
+  }));
+
+  await handleMessages("telegram:57", [
+    attachmentMessage("telegram:57", "57:m1", { mediaType: "voice", mediaFileId: "voice-1", mediaMimeType: "audio/ogg" }),
+  ]);
+
+  assert.equal(llmProvider.requests[0].attachments?.[0].mimeType, "audio/ogg");
 });

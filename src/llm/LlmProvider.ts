@@ -14,6 +14,19 @@ export interface LlmConversationTurn {
   text: string;
 }
 
+/**
+ * A file sent alongside the customer's message -- a voice message, a
+ * photo of a product, a screenshot, a PDF -- for a model that can read it
+ * directly. Deliberately just bytes plus a MIME type: no Telegram
+ * `file_id`, no URL, nothing tying this port to how the file was obtained
+ * or which platform it came from.
+ */
+export interface LlmAttachment {
+  /** e.g. "audio/ogg", "image/jpeg", "application/pdf". What the model uses to decide how to decode `dataBase64`. */
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface LlmReplyRequest {
   /** The full system prompt for this turn, including the injected knowledge base -- see src/prompts/loader.ts. */
   systemPrompt: string;
@@ -21,6 +34,14 @@ export interface LlmReplyRequest {
   historyTurns: LlmConversationTurn[];
   /** The customer's new message for this turn. */
   newUserMessage: string;
+  /**
+   * Files attached to this turn, if any. Sent only with the new message,
+   * never replayed as part of `historyTurns` -- re-uploading every photo
+   * and voice message a conversation ever contained on every subsequent
+   * turn would grow the request without bound. The model's own reply
+   * carries what mattered forward instead.
+   */
+  attachments?: LlmAttachment[];
 }
 
 export interface LlmReplyResult {

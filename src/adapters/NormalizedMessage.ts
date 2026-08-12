@@ -3,6 +3,22 @@ export interface NormalizedMessage {
   text: string | null;
   mediaType: string | null;
   /**
+   * An opaque, platform-specific handle for this message's attachment,
+   * meaningful only to the same adapter that produced it -- the engine
+   * never interprets it, it only hands it back to the
+   * `downloadMedia` function composition.ts wired in (see
+   * ConversationEngineDependencies), exactly as it already does with
+   * `InboundMessage.messageId` and `forwardMessageToRecipient`.
+   *
+   * Null whenever there is nothing worth reading: a plain text message, a
+   * shared location or contact (both already surfaced as text), a sticker,
+   * or any platform whose adapter doesn't implement media download.
+   * Telegram only today -- always null on Instagram.
+   */
+  mediaFileId: string | null;
+  /** The attachment's MIME type (e.g. "audio/ogg", "image/jpeg"), as the platform reported it or as the adapter knows it to be. Only ever set alongside `mediaFileId`. */
+  mediaMimeType: string | null;
+  /**
    * A human-readable identifier for the sender, already resolved by the
    * platform-specific adapter (e.g. "@username" for Telegram) so that
    * platform-agnostic code reading this (ConversationEngine's manager

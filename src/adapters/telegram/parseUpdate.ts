@@ -7,6 +7,13 @@ import type { ParsedUpdateResult } from "../ParsedUpdateResult";
  * more fields we simply ignore. Every field here is optional/loosely
  * typed on purpose, because we only trust what we explicitly check for.
  */
+/** Telegram's common shape for any attached file. `mime_type` is absent on some types (photos, most video notes) -- see DEFAULT_MIME_TYPES. */
+interface TelegramFile {
+  file_id: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 interface TelegramMessage {
   message_id: number;
   date: number;
@@ -15,14 +22,17 @@ interface TelegramMessage {
   /** The message's sender. Absent only for channel posts (not read by this project) -- always present on a private-chat message. */
   from?: { username?: string; first_name?: string; last_name?: string };
   text?: string;
-  photo?: unknown[];
-  voice?: unknown;
-  video_note?: unknown;
-  video?: unknown;
-  sticker?: unknown;
+  /** The text a customer typed *alongside* an attachment. Telegram puts it here, not in `text` -- see extractText. */
+  caption?: string;
+  /** Telegram sends every photo as an array of progressively larger renderings of the same image, smallest first -- see detectMedia. */
+  photo?: TelegramFile[];
+  voice?: TelegramFile;
+  video_note?: TelegramFile;
+  video?: TelegramFile;
+  sticker?: TelegramFile;
   location?: { latitude: number; longitude: number };
   contact?: { phone_number: string };
-  document?: unknown;
+  document?: TelegramFile;
   /**
    * Present only on a message belonging to a Telegram Business chat (see
    * https://core.telegram.org/bots/api#business-connection) -- the same
@@ -59,6 +69,10 @@ export interface NormalizedTelegramMessage {
   telegramMessageId: number;
   text: string | null;
   mediaType: TelegramMediaType | null;
+  /** See NormalizedMessage.ts. Telegram's opaque handle for this message's attachment, or null when there's nothing downloadable (plain text, a location, a contact card, a sticker). */
+  mediaFileId: string | null;
+  /** See NormalizedMessage.ts. Only ever set alongside mediaFileId. */
+  mediaMimeType: string | null;
   isEdited: boolean;
   /** Unix seconds, from Telegram's `date` (or `edit_date` for an edited message). */
   timestamp: number;
@@ -129,14 +143,17 @@ function toInboundMessage(message: TelegramMessage, isEdited: boolean): InboundM
   const customerId = `telegram:${chatId}`;
   const messageId = `${chatId}:${message.message_id}`;
   const { senderDisplayName, senderProfileUrl } = describeSender(message.from);
+  const media = detectMedia(message);
 
   const normalized: NormalizedTelegramMessage = {
     platform: "telegram",
     customerId,
     chatId,
     telegramMessageId: message.message_id,
-    text: message.text ?? extractStructuredText(message),
-    mediaType: detectMediaType(message),
+    text: extractText(message),
+    mediaType: media.mediaType,
+    mediaFileId: media.fileId,
+    mediaMimeType: media.mimeType,
     isEdited,
     timestamp: isEdited ? message.edit_date ?? message.date : message.date,
     senderDisplayName,
@@ -170,6 +187,18 @@ function describeSender(from: TelegramMessage["from"]): { senderDisplayName: str
 }
 
 /**
+ * Telegram puts the words a customer typed next to an attachment in
+ * `caption`, never in `text` -- so reading `text` alone silently discarded
+ * the actual question on every photo, video and document ever sent ("это у
+ * вас есть?" attached to a product photo arrived as no text at all). The
+ * two are mutually exclusive on a real message, so this is a fallback
+ * chain rather than a merge.
+ */
+function extractText(message: TelegramMessage): string | null {
+  return message.text ?? message.caption ?? extractStructuredText(message);
+}
+
+/**
  * A shared contact/location arrives as its own message type, not text --
  * but the order-collection flow treats them as equivalent to typing the
  * phone number or address (see system_prompt.md), so surface them as
@@ -194,6 +223,59 @@ export function parseTelegramMessageId(messageId: string): { chatId: number; tel
     throw new Error(`"${messageId}" is not a valid Telegram message id (expected the form "<chatId>:<messageId>").`);
   }
   return { chatId: Number(match[1]), telegramMessageId: Number(match[2]) };
+}
+
+/**
+ * What Telegram omits rather than sends. A photo is always re-encoded to
+ * JPEG by Telegram itself, a voice message is always OGG/Opus, and a video
+ * note is always MP4 -- all three arrive with no `mime_type` field at all,
+ * so the type is known from *which* field carried the file, not from the
+ * payload. Types not listed here (video, document) do send a real
+ * `mime_type`, and guessing one for them would be worse than using theirs.
+ */
+const DEFAULT_MIME_TYPES: Partial<Record<TelegramMediaType, string>> = {
+  photo: "image/jpeg",
+  voice: "audio/ogg",
+  video_note: "video/mp4",
+};
+
+/**
+ * Which media a message carries and -- for the kinds whose content the
+ * assistant can actually read -- the handle needed to download it.
+ *
+ * `fileId` stays null for location, contact and sticker even though the
+ * first two are real message types and the last is a real file: a location
+ * and a contact are already surfaced as text (see extractStructuredText),
+ * and a sticker is a reaction rather than a question. Downloading any of
+ * them would spend a model call to learn nothing.
+ */
+function detectMedia(message: TelegramMessage): {
+  mediaType: TelegramMediaType | null;
+  fileId: string | null;
+  mimeType: string | null;
+} {
+  // Telegram sends a photo as several sizes of the same image, ordered
+  // smallest to largest. The last is the highest resolution available,
+  // which is the one worth showing a vision model -- a thumbnail is often
+  // too small to read a label or a screenshot of a price list.
+  const file =
+    message.photo?.[message.photo.length - 1] ??
+    message.voice ??
+    message.video_note ??
+    message.video ??
+    message.document ??
+    null;
+
+  const mediaType = detectMediaType(message);
+  if (file === null || mediaType === null) {
+    return { mediaType, fileId: null, mimeType: null };
+  }
+
+  return {
+    mediaType,
+    fileId: file.file_id,
+    mimeType: file.mime_type ?? DEFAULT_MIME_TYPES[mediaType] ?? null,
+  };
 }
 
 function detectMediaType(message: TelegramMessage): TelegramMediaType | null {

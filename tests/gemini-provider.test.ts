@@ -243,3 +243,69 @@ test("logs gemini_api.error and gemini_api.retry without ever including the API 
   const serialized = JSON.stringify(entries);
   assert.doesNotMatch(serialized, /AIzaSyExampleKeyText1234567890abcdefg/, "the API key must never appear in any logged field");
 });
+
+test("attachments are sent as inline data on the new turn, ahead of the text that asks about them", async () => {
+  const { fetchImpl, requests } = fakeFetch([okGenerateResponse("Да, это наш миндаль.")]);
+  const provider = new GeminiProvider({
+    apiKey: "key",
+    model: "gemini-2.5-flash",
+    fetchImpl,
+    sleep: async () => {},
+    logger: fakeLogger().logger,
+  });
+
+  await provider.generateReply({
+    systemPrompt: "prompt",
+    historyTurns: [],
+    newUserMessage: "это у вас есть?",
+    attachments: [{ mimeType: "image/jpeg", dataBase64: "aW1hZ2U=" }],
+  });
+
+  const body = requests[0].body as { contents: Array<{ role: string; parts: unknown[] }> };
+  assert.deepEqual(body.contents[0].parts, [
+    { inline_data: { mime_type: "image/jpeg", data: "aW1hZ2U=" } },
+    { text: "это у вас есть?" },
+  ]);
+});
+
+test("a turn with no attachments sends exactly the text-only shape it always did", async () => {
+  const { fetchImpl, requests } = fakeFetch([okGenerateResponse("150.000 сум за кг.")]);
+  const provider = new GeminiProvider({
+    apiKey: "key",
+    model: "gemini-2.5-flash",
+    fetchImpl,
+    sleep: async () => {},
+    logger: fakeLogger().logger,
+  });
+
+  await provider.generateReply({ systemPrompt: "prompt", historyTurns: [], newUserMessage: "сколько стоит?" });
+
+  const body = requests[0].body as { contents: Array<{ role: string; parts: unknown[] }> };
+  assert.deepEqual(body.contents[0].parts, [{ text: "сколько стоит?" }]);
+});
+
+test("history turns never carry attachments back, so a long conversation can't grow without bound", async () => {
+  const { fetchImpl, requests } = fakeFetch([okGenerateResponse("Хорошо.")]);
+  const provider = new GeminiProvider({
+    apiKey: "key",
+    model: "gemini-2.5-flash",
+    fetchImpl,
+    sleep: async () => {},
+    logger: fakeLogger().logger,
+  });
+
+  await provider.generateReply({
+    systemPrompt: "prompt",
+    historyTurns: [
+      { role: "user", text: "[Клиент прислал фото без текста]" },
+      { role: "assistant", text: "Это наш миндаль." },
+    ],
+    newUserMessage: "спасибо",
+    attachments: [{ mimeType: "image/jpeg", dataBase64: "aW1hZ2U=" }],
+  });
+
+  const body = requests[0].body as { contents: Array<{ role: string; parts: unknown[] }> };
+  assert.deepEqual(body.contents[0].parts, [{ text: "[Клиент прислал фото без текста]" }]);
+  assert.deepEqual(body.contents[1].parts, [{ text: "Это наш миндаль." }]);
+  assert.equal(body.contents[2].parts.length, 2, "only the new turn carries the file");
+});

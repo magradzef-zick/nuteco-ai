@@ -1,11 +1,16 @@
-import type { TelegramTransport, TelegramReplyKeyboardMarkup } from "../../src/adapters/telegram/TelegramTransport";
+import type {
+  TelegramTransport,
+  TelegramReplyKeyboardMarkup,
+  DownloadedFile,
+} from "../../src/adapters/telegram/TelegramTransport";
 
 export type RecordedCall =
   | { method: "sendMessage"; chatId: number; text: string; replyMarkup?: TelegramReplyKeyboardMarkup; businessConnectionId?: string }
   | { method: "sendChatAction"; chatId: number; action: "typing"; businessConnectionId?: string }
   | { method: "getMe" }
   | { method: "setWebhook"; url: string; secretToken?: string; allowedUpdates?: string[] }
-  | { method: "forwardMessage"; toChatId: number; fromChatId: number; messageId: number };
+  | { method: "forwardMessage"; toChatId: number; fromChatId: number; messageId: number }
+  | { method: "downloadFile"; fileId: string };
 
 /**
  * A fake TelegramTransport that records every call instead of touching the
@@ -18,6 +23,8 @@ export class FakeTelegramTransport implements TelegramTransport {
   readonly calls: RecordedCall[] = [];
   getMeResult: { id: number; username: string | null } = { id: 1, username: "nuteco_test_bot" };
   getMeError: Error | null = null;
+  downloadFileResult: DownloadedFile = { dataBase64: "ZmFrZS1ieXRlcw==", mimeType: null };
+  downloadFileError: Error | null = null;
 
   async sendMessage(
     chatId: number,
@@ -52,5 +59,13 @@ export class FakeTelegramTransport implements TelegramTransport {
 
   async forwardMessage(toChatId: number, fromChatId: number, messageId: number): Promise<void> {
     this.calls.push({ method: "forwardMessage", toChatId, fromChatId, messageId });
+  }
+
+  async downloadFile(fileId: string): Promise<DownloadedFile> {
+    this.calls.push({ method: "downloadFile", fileId });
+    if (this.downloadFileError) {
+      throw this.downloadFileError;
+    }
+    return this.downloadFileResult;
   }
 }

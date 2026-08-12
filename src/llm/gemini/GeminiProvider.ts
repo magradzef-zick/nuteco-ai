@@ -149,7 +149,19 @@ export class GeminiProvider implements LlmProvider {
           role: turn.role === "assistant" ? "model" : "user",
           parts: [{ text: turn.text }],
         })),
-        { role: "user", parts: [{ text: request.newUserMessage }] },
+        // Attachments precede the text on purpose: Google's own guidance
+        // is that a single image/audio part placed before the prompt gives
+        // better results than the reverse, and the text here is usually a
+        // question *about* the file ("это у вас есть?").
+        {
+          role: "user",
+          parts: [
+            ...(request.attachments ?? []).map((attachment) => ({
+              inline_data: { mime_type: attachment.mimeType, data: attachment.dataBase64 },
+            })),
+            { text: request.newUserMessage },
+          ],
+        },
       ],
       generationConfig: {
         temperature: this.temperature,
@@ -260,6 +272,16 @@ function buildApiErrorMessage(method: string, statusCode: number, description: s
 
   if (statusCode === 401 || statusCode === 403) {
     return `${base} This usually means GEMINI_API_KEY is invalid or doesn't have access to model requests -- check it in your .env file against the Google AI Studio / Google Cloud console.`;
+  }
+
+  if (statusCode === 400) {
+    return (
+      `${base} Gemini reports a 400 as a bare "invalid argument" with no field name, so the usual cause is worth ` +
+      `checking first: newer models (gemini-flash-latest, gemini-3.6-flash and friends) reject the ` +
+      `\`thinkingConfig.thinkingBudget: 0\` this provider sends, and want \`thinkingLevel\` instead. If this started ` +
+      `right after a GEMINI_MODEL change, that's why -- either pick a model that accepts it (gemini-3.5-flash does) ` +
+      `or update the generationConfig in this file.`
+    );
   }
 
   if (statusCode === 404) {

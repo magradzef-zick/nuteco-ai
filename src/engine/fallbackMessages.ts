@@ -17,6 +17,7 @@ import type { DetectedLanguage } from "./languageDetector";
 
 export type FallbackReason =
   | "mediaFallback"
+  | "mediaUnreadable"
   | "unverifiedNumber"
   | "b2bEscalation"
   | "technicalHiccup";
@@ -24,11 +25,25 @@ export type FallbackReason =
 type FallbackMessageSet = Record<FallbackReason, Record<DetectedLanguage, string>>;
 
 export const FALLBACK_MESSAGES: FallbackMessageSet = {
-  // Voice/photo/video the assistant can't read yet -- ask for text.
+  // Media whose content there is nothing to read: a sticker, or any
+  // platform whose adapter can't download attachments (Instagram today).
+  // Voice, photo, video and documents no longer land here on Telegram --
+  // they go to the model with the file attached; see ConversationEngine.
   mediaFallback: {
-    ru: "Пока не могу открыть голосовые, фото и видео — опишите, пожалуйста, текстом 😊",
-    uz: "Ovozli xabar, rasm va videoni hali oʻqiy olmayman — matn bilan yozib yuborsangiz boʻladimi?",
-    en: "I can't listen to voice messages or view photos/videos yet — could you describe it in text?",
+    ru: "Пока не могу открыть это вложение — опишите, пожалуйста, текстом 😊",
+    uz: "Bu biriktirmani hozircha ocholmayman — matn bilan yozib yuborsangiz boʻladimi?",
+    en: "I can't open this attachment — could you describe it in text?",
+  },
+  // The file *was* meant to be read but couldn't be: too large for the
+  // model, a download that failed, an unsupported format. Deliberately
+  // does not ask the customer to retype it -- a manager is being notified
+  // and gets the original forwarded to them, so the honest thing to say is
+  // that a human is picking it up, not that the customer must do the work
+  // again.
+  mediaUnreadable: {
+    ru: "Не смог открыть файл — передал менеджеру, он посмотрит и ответит 😊",
+    uz: "Faylni ocholmadim — menejerga uzatdim, koʻrib javob beradi.",
+    en: "I couldn't open that file — I've passed it to our team, they'll take a look and reply.",
   },
   // The hallucination guardrail blocked a reply because it contained a
   // price/quantity/figure not actually confirmed in the knowledge base --

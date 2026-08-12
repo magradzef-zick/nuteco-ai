@@ -59,6 +59,18 @@ export interface NormalizedInstagramMessage {
   instagramMessageId: string;
   text: string | null;
   mediaType: InstagramMediaType | null;
+  /**
+   * See NormalizedMessage.ts. Always null here, deliberately: Instagram
+   * attachments arrive as short-lived Meta CDN URLs rather than a
+   * re-fetchable id, so reading them is its own piece of work (and only
+   * worth doing once Instagram stops being fully redirected to Telegram --
+   * see instagramRedirectHandler.ts). Until then an Instagram media
+   * message falls through to the same "please describe it in text" reply
+   * it always got.
+   */
+  mediaFileId: null;
+  /** See NormalizedMessage.ts. Always null here -- only ever set alongside mediaFileId. */
+  mediaMimeType: null;
   /** Unix milliseconds, from Meta's per-event `timestamp`. */
   timestamp: number;
   /**
@@ -157,6 +169,8 @@ function toInboundMessage(event: InstagramMessagingEvent, message: InstagramMess
     instagramMessageId: message.mid,
     text: message.text ?? null,
     mediaType: detectMediaType(message),
+    mediaFileId: null,
+    mediaMimeType: null,
     timestamp: event.timestamp,
     senderDisplayName: null,
     senderProfileUrl: null,

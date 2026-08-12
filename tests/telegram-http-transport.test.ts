@@ -233,3 +233,73 @@ test("logs telegram_api.retry once per retry, and telegram_api.error for the und
   assert.equal(entries.filter((e) => e.event === "telegram_api.error").length, 1);
   assert.equal(entries.filter((e) => e.event === "telegram_api.retry").length, 1);
 });
+
+test("downloadFile resolves a file_id through getFile, then fetches the bytes from Telegram's separate file host", async () => {
+  const { fetchImpl, requests } = fakeFetch([
+    okResponse({ file_id: "voice-1", file_path: "voice/file_7.oga", file_size: 9_000 }),
+    new Response(Buffer.from("audio-bytes"), { status: 200, headers: { "content-type": "audio/ogg" } }),
+  ]);
+  const transport = new HttpTelegramTransport({ botToken: "TOKEN", fetchImpl, sleep: async () => {}, logger: fakeLogger().logger });
+
+  const file = await transport.downloadFile("voice-1");
+
+  assert.deepEqual(requests[0].body, { file_id: "voice-1" });
+  assert.match(requests[0].url, /\/botTOKEN\/getFile$/);
+  assert.match(requests[1].url, /\/file\/botTOKEN\/voice\/file_7\.oga$/, "file content comes from /file/bot<token>/, not the API path");
+  assert.equal(file.dataBase64, Buffer.from("audio-bytes").toString("base64"));
+  assert.equal(file.mimeType, "audio/ogg");
+});
+
+test("downloadFile rejects an oversized file from getFile's own metadata, without transferring a single byte", async () => {
+  const { fetchImpl, callCount } = fakeFetch([
+    okResponse({ file_id: "video-1", file_path: "videos/file_1.mp4", file_size: 48 * 1024 * 1024 }),
+  ]);
+  const transport = new HttpTelegramTransport({ botToken: "TOKEN", fetchImpl, sleep: async () => {}, logger: fakeLogger().logger });
+
+  await assert.rejects(() => transport.downloadFile("video-1"), { name: "TelegramFileTooLargeError" });
+  assert.equal(callCount(), 1, "downloading 48 MB only to reject it afterwards would waste the customer's time and ours");
+});
+
+test("downloadFile still catches an oversized file when Telegram omits file_size, which it is allowed to do", async () => {
+  const { fetchImpl } = fakeFetch([
+    okResponse({ file_id: "video-2", file_path: "videos/file_2.mp4" }),
+    new Response(Buffer.alloc(16 * 1024 * 1024), { status: 200, headers: { "content-type": "video/mp4" } }),
+  ]);
+  const transport = new HttpTelegramTransport({ botToken: "TOKEN", fetchImpl, sleep: async () => {}, logger: fakeLogger().logger });
+
+  await assert.rejects(() => transport.downloadFile("video-2"), { name: "TelegramFileTooLargeError" });
+});
+
+test("downloadFile reports a missing file_path plainly -- Telegram returns this for files above its own serving limit", async () => {
+  const { fetchImpl } = fakeFetch([okResponse({ file_id: "video-3", file_size: 1_000 })]);
+  const transport = new HttpTelegramTransport({ botToken: "TOKEN", fetchImpl, sleep: async () => {}, logger: fakeLogger().logger });
+
+  await assert.rejects(() => transport.downloadFile("video-3"), (error: TelegramApiError) => {
+    assert.equal(error.name, "TelegramApiError");
+    assert.match(error.message, /file_path/);
+    return true;
+  });
+});
+
+test("downloadFile treats a generic octet-stream content type as no information, leaving the caller to use the message's own", async () => {
+  const { fetchImpl } = fakeFetch([
+    okResponse({ file_id: "doc-1", file_path: "documents/file_1", file_size: 100 }),
+    new Response(Buffer.from("x"), { status: 200, headers: { "content-type": "application/octet-stream" } }),
+  ]);
+  const transport = new HttpTelegramTransport({ botToken: "TOKEN", fetchImpl, sleep: async () => {}, logger: fakeLogger().logger });
+
+  assert.equal((await transport.downloadFile("doc-1")).mimeType, null);
+});
+
+test("downloadFile never logs the URL it fetched, which embeds the bot token", async () => {
+  const { logger, entries } = fakeLogger();
+  const { fetchImpl } = fakeFetch([
+    okResponse({ file_id: "voice-1", file_path: "voice/file_7.oga", file_size: 100 }),
+    new TelegramNetworkError("boom", new Error("boom")),
+  ]);
+  const transport = new HttpTelegramTransport({ botToken: "SECRET-TOKEN", fetchImpl, sleep: async () => {}, logger });
+
+  await assert.rejects(() => transport.downloadFile("voice-1"));
+  assert.ok(entries.length > 0, "the failure must still be logged");
+  assert.ok(!JSON.stringify(entries).includes("SECRET-TOKEN"));
+});

@@ -244,3 +244,82 @@ test("parseTelegramMessageId is the exact inverse of the messageId parseUpdate c
 test("parseTelegramMessageId throws clearly on a malformed id", () => {
   assert.throws(() => parseTelegramMessageId("not-a-message-id"), /not a valid Telegram message id/);
 });
+
+test("a photo carries the file id of its largest rendering -- a thumbnail is often too small to read a label", () => {
+  const result = parseUpdate(
+    textMessageUpdate({
+      text: undefined,
+      photo: [
+        { file_id: "thumb", file_size: 1_200 },
+        { file_id: "medium", file_size: 30_000 },
+        { file_id: "full", file_size: 180_000 },
+      ],
+    })
+  );
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaType, "photo");
+  assert.equal(payload.mediaFileId, "full");
+  assert.equal(payload.mediaMimeType, "image/jpeg", "Telegram sends no mime_type for photos -- it always re-encodes them to JPEG");
+});
+
+test("a caption is the customer's actual question and must not be dropped the way reading only `text` did", () => {
+  const result = parseUpdate(
+    textMessageUpdate({ text: undefined, caption: "это у вас есть?", photo: [{ file_id: "full", file_size: 180_000 }] })
+  );
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  assert.equal((result.message.payload as NormalizedTelegramMessage).text, "это у вас есть?");
+});
+
+test("a voice message is downloadable and typed as OGG, which Telegram never states explicitly", () => {
+  const result = parseUpdate(textMessageUpdate({ text: undefined, voice: { file_id: "voice-1", file_size: 9_000 } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaType, "voice");
+  assert.equal(payload.mediaFileId, "voice-1");
+  assert.equal(payload.mediaMimeType, "audio/ogg");
+});
+
+test("a document keeps the mime type Telegram reported, rather than one guessed from the media kind", () => {
+  const result = parseUpdate(
+    textMessageUpdate({ text: undefined, document: { file_id: "doc-1", mime_type: "application/pdf", file_size: 50_000 } })
+  );
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaFileId, "doc-1");
+  assert.equal(payload.mediaMimeType, "application/pdf");
+});
+
+test("a sticker is recognized but not downloadable -- it is a reaction, not a question worth a model call", () => {
+  const result = parseUpdate(textMessageUpdate({ text: undefined, sticker: { file_id: "sticker-1" } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaType, "sticker");
+  assert.equal(payload.mediaFileId, null);
+});
+
+test("a shared location stays text-only: it is already surfaced as coordinates, with no file behind it", () => {
+  const result = parseUpdate(textMessageUpdate({ text: undefined, location: { latitude: 41.3, longitude: 69.2 } }));
+
+  assert.equal(result.kind, "message");
+  if (result.kind !== "message") return;
+
+  const payload = result.message.payload as NormalizedTelegramMessage;
+  assert.equal(payload.mediaFileId, null);
+  assert.match(payload.text ?? "", /41\.3/);
+});
