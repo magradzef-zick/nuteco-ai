@@ -38,7 +38,7 @@ test("applies sensible defaults for optional settings", () => {
   const config = loadConfig(baseEnv());
 
   assert.equal(config.telegramWebhookSecretToken, null);
-  assert.equal(config.geminiModel, "gemini-2.5-flash");
+  assert.equal(config.geminiModel, "gemini-3.5-flash");
   assert.equal(config.knowledgeBaseDir, "./knowledge");
   assert.equal(config.promptsDir, "./prompts");
   assert.equal(config.databasePath, "./data/nuteco.db");
