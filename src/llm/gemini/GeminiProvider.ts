@@ -293,6 +293,16 @@ function buildApiErrorMessage(method: string, statusCode: number, description: s
     );
   }
 
+  if (statusCode === 429) {
+    return (
+      `${base} On a free-tier key this is usually the *daily* allowance for this specific model, not a burst ` +
+      `limit that clears in a minute -- gemini-3.5-flash, for one, permits 20 generate calls per project per ` +
+      `day, after which every customer message becomes an escalation until midnight Pacific. Retrying cannot ` +
+      `fix that. Either enable billing on the Google Cloud project (the only real fix for a deployment taking ` +
+      `messages all day) or move GEMINI_MODEL to a model whose separate quota is still unspent.`
+    );
+  }
+
   if (statusCode === 404) {
     return `${base} This usually means the configured GEMINI_MODEL name doesn't exist or isn't available to this API key -- check the model name against Google's current model list.`;
   }

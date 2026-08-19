@@ -20,7 +20,7 @@ audit pass).
 | Variable | Default | Notes |
 |---|---|---|
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | none | Strongly recommended in production -- without it, anyone who discovers the webhook URL can send fake updates. `openssl rand -hex 32`. |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | |
+| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | |
 | `KNOWLEDGE_BASE_DIR` | `./knowledge` | |
 | `PROMPTS_DIR` | `./prompts` | |
 | `DATABASE_PATH` | `./data/nuteco.db` | Under Docker, this path is inside the container; `docker-compose.yml` mounts a named volume at `/app/data` so it persists. |

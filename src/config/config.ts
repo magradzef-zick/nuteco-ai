@@ -117,14 +117,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     telegramWebhookSecretToken: env.TELEGRAM_WEBHOOK_SECRET_TOKEN?.trim() || null,
     managerNotificationChatId: managerNotificationChatId!,
     geminiApiKey: geminiApiKey!,
-    // Google retires models out from under a running deployment: the
-    // previous default, gemini-2.5-flash, started answering 404 ("no
-    // longer available to new users") on a key that had been working,
-    // which takes the assistant down entirely rather than degrading it.
-    // Whatever is set here will eventually go the same way -- when it
-    // does, the fix is GEMINI_MODEL in .env, and the 404 message in
-    // GeminiProvider says exactly that.
-    geminiModel: env.GEMINI_MODEL?.trim() || "gemini-3.5-flash",
+    // Two independent things have taken this assistant down through this
+    // one setting, so it is worth naming both. Google retires models out
+    // from under a running deployment: gemini-2.5-flash began answering
+    // 404 ("no longer available to new users") on a key that had been
+    // working. And each model carries its own free-tier quota, counted per
+    // day, not per minute -- gemini-3.5-flash allows 20 generate calls a
+    // day in total, which a real conversation exhausts before lunch and
+    // which turns every later customer message into an escalation.
+    //
+    // A flash-lite model is the default because its free-tier allowance is
+    // the roomiest available, but the real answer for a deployment taking
+    // customer messages all day is billing enabled on the Google Cloud
+    // project; no model choice makes a free tier sufficient. When this one
+    // is retired or exhausted in turn, the fix is GEMINI_MODEL in .env,
+    // and GeminiProvider's 404 and 429 messages both say so.
+    geminiModel: env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite",
     knowledgeBaseDir: env.KNOWLEDGE_BASE_DIR?.trim() || "./knowledge",
     promptsDir: env.PROMPTS_DIR?.trim() || "./prompts",
     databasePath: env.DATABASE_PATH?.trim() || "./data/nuteco.db",

@@ -124,3 +124,11 @@ test("matching units across scripts does not wave through a size the knowledge b
   const invented = checkForUnverifiedNumbers("Pista pastasi 5 kg — 450.000 so'm", knowledgeBase);
   assert.equal(invented.safe, false, "there is no 5 кг size -- transliteration must not become a blanket pass");
 });
+
+test("an Uzbek Cyrillic reply verifies against the same Russian knowledge base", () => {
+  const knowledgeBase = "Фисташковая паста: 200 гр — 100.000, 1 кг — 450.000.";
+  const result = checkForUnverifiedNumbers("Писта пастаси: 200 гр — 100.000 сўм, 1 кг — 450.000 сўм", knowledgeBase);
+
+  assert.deepEqual(result.unverifiedNumbers, [], "Uzbek written in Cyrillic shares the knowledge base's own units");
+  assert.equal(result.safe, true);
+});

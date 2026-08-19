@@ -71,7 +71,7 @@ Copy `.env.example` to `.env` and fill in the values below. [`docs/ENVIRONMENT.m
 | `GEMINI_API_KEY` | Yes | — | From [Google AI Studio](https://aistudio.google.com/apikey). |
 | `MANAGER_NOTIFICATION_CHAT_ID` | Yes | — | Telegram chat/group ID that receives escalation notifications. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | none | Strongly recommended in production. Checked on every incoming webhook request; without it, anyone who discovers the webhook URL can send fake updates. Generate with `openssl rand -hex 32`. |
-| `GEMINI_MODEL` | No | `gemini-3.5-flash` | Override if the default is renamed or deprecated. |
+| `GEMINI_MODEL` | No | `gemini-3.1-flash-lite` | Override if the default is renamed or deprecated. |
 | `KNOWLEDGE_BASE_DIR` | No | `./knowledge` | Directory of markdown files the assistant answers from. |
 | `PROMPTS_DIR` | No | `./prompts` | Directory containing the system prompt template. |
 | `DATABASE_PATH` | No | `./data/nuteco.db` | SQLite file location. Parent directory is created automatically if missing. |

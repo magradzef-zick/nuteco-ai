@@ -10,7 +10,7 @@ import type { LlmProvider, LlmConversationTurn, LlmReplyResult, LlmAttachment } 
 import { checkForUnverifiedNumbers } from "./hallucinationGuardrail";
 import { detectStrongB2bSignal } from "./b2bDetector";
 import { detectRequestedInput } from "./requestedInputDetector";
-import { detectLanguage } from "./languageDetector";
+import { detectLanguage, type DetectedLanguage } from "./languageDetector";
 import { fallbackMessage } from "./fallbackMessages";
 import type { Logger } from "../observability/logger";
 
@@ -107,6 +107,13 @@ export interface ConversationEngineDependencies {
 
 interface StoredHistory {
   history: LlmConversationTurn[];
+  /** The language this conversation is being held in, so a later message with no text of its own (a voice message) still gets its fallbacks in the right one. */
+  language: DetectedLanguage;
+}
+
+function rememberedLanguage(variables: Record<string, unknown> | undefined): DetectedLanguage | null {
+  const stored = variables?.language;
+  return stored === "ru" || stored === "uz" || stored === "en" ? stored : null;
 }
 
 /**
@@ -305,6 +312,19 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
     }
     const history = extractHistory(state?.variables);
 
+    // A voice message has no text, so `language` above is only
+    // detectLanguage's Russian default -- which is how a customer speaking
+    // Uzbek was sent a Russian fallback. What this conversation has been in
+    // was already worked out on an earlier turn, so it is remembered rather
+    // than re-derived: re-running detection over the assistant's own past
+    // replies means depending on a keyword list to recognize text this
+    // project itself wrote, and it demonstrably does not (the Uzbek
+    // "Javob chiqmadi" fallback contains no listed stem and reads as
+    // English). A remembered value is exact where a heuristic is a guess.
+    if (!hasText) {
+      language = rememberedLanguage(state?.variables) ?? language;
+    }
+
     // Carries a phone/location shared on an earlier turn forward to
     // whichever later turn actually triggers the manager handoff -- the
     // batch that says "готово" is rarely the same one that shared the
@@ -502,7 +522,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
           currentStep: state?.currentStep ?? null,
           pendingClarification: state?.pendingClarification ?? null,
           escalationFlag: escalated,
-          variables: { history: updatedHistory } satisfies StoredHistory,
+          variables: { history: updatedHistory, language } satisfies StoredHistory,
         },
         now,
         DEFAULT_CONVERSATION_STATE_TTL_MS

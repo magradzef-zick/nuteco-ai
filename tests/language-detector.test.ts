@@ -44,3 +44,20 @@ test("Russian-root words with Uzbek grammatical suffixes and no recognizable Uzb
   // Russian sentences. Defaulting to Russian here is correct, not a gap.
   assert.equal(detectLanguage("Договор хам подтвердилмаган"), "ru");
 });
+
+/**
+ * Uzbek's oʻ/gʻ appear with a modifier letter (ʻ), typographic quotes, a
+ * backtick or a plain ASCII quote depending on keyboard and habit, mixed
+ * freely within real messages. Treating them as different characters made
+ * ordinary Uzbek text match no stem at all and lose to Latin-script
+ * dominance -- classified as English, and answered in English.
+ */
+test("Uzbek is recognized whichever apostrophe-like character it is typed with", () => {
+  for (const apostrophe of ["'", "ʻ", "‘", "’", "`"]) {
+    assert.equal(detectLanguage(`Yo${apostrophe}q, kerak emas`), "uz", `failed for U+${apostrophe.charCodeAt(0).toString(16)}`);
+  }
+});
+
+test("this project's own Uzbek fallback text is recognized as Uzbek, not English", () => {
+  assert.equal(detectLanguage("Aniq ayta olmayman, taxmin qilgim yoʻq — menejerdan aniqlab yozaman."), "uz");
+});

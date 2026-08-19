@@ -878,3 +878,36 @@ test("the message's own MIME type wins over whatever the file host's header clai
 
   assert.equal(llmProvider.requests[0].attachments?.[0].mimeType, "audio/ogg");
 });
+
+test("when the model is unreachable, a voice message's fallback follows the language the conversation has been in", async () => {
+  // Answers turn one normally, then goes down -- so turn two has neither
+  // customer text (a voice message has none) nor a fresh reply to read the
+  // language from. Only the conversation's history is left.
+  let calls = 0;
+  const flakyProvider: LlmProvider = {
+    generateReply: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: "Ha, bor. Pista pastasi 1 kg — 450.000 so'm.", truncated: false };
+      }
+      throw new Error("network is down");
+    },
+    checkHealth: async () => {},
+  };
+
+  const { handleMessages, transport } = setup([], [], flakyProvider);
+
+  await handleMessages("telegram:59", [textMessage("telegram:59", "59:m1", "Pista pastasi bormi?")]);
+  await handleMessages("telegram:59", [
+    attachmentMessage("telegram:59", "59:m2", { mediaType: "voice", mediaFileId: "voice-1", mediaMimeType: "audio/ogg" }),
+  ]);
+
+  const customerReplies = transport.calls.filter((c) => c.method === "sendMessage" && c.chatId === 59);
+  const lastReply = customerReplies[customerReplies.length - 1];
+  assert.ok(lastReply && lastReply.method === "sendMessage");
+  assert.equal(
+    lastReply.text,
+    fallbackMessage("technicalHiccup", "uz"),
+    "a customer who has been speaking Uzbek must not get a Russian apology"
+  );
+});

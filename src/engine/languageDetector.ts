@@ -93,6 +93,21 @@ function countWordsContaining(text: string, characterClass: string): number {
 }
 
 /**
+ * Uzbek writes oʻ and gʻ with any of several apostrophe-like characters in
+ * practice -- the modifier letter (ʻ), a typographic quote (‘ ’), a
+ * backtick, or a plain ASCII quote -- and real messages mix them freely.
+ * The stems above use ASCII, so without folding them together "yoʻq" and
+ * "yo'q" are different strings and an ordinary Uzbek message matches no
+ * stem at all, losing to raw Latin-script dominance and being classified as
+ * English. This project's own Uzbek fallback messages are written with the
+ * modifier letter, so its replies hit this too: an Uzbek conversation could
+ * turn English purely because the assistant read back its own text.
+ */
+function normalizeApostrophes(text: string): string {
+  return text.replace(/[\u02BB\u02BC\u2018\u2019\u0060\u00B4]/g, "'");
+}
+
+/**
  * True if any of `stems` appears in `text` starting right after a
  * word-separator (or at the start of the string) -- deliberately not
  * requiring a boundary on the right, so a suffix attached directly after
@@ -100,7 +115,7 @@ function countWordsContaining(text: string, characterClass: string): number {
  * entirely, which is the correct fix for Cyrillic text (see module doc).
  */
 function containsStemAt(text: string, stems: string[]): boolean {
-  const lower = text.toLowerCase();
+  const lower = normalizeApostrophes(text.toLowerCase());
   for (const stem of stems) {
     let from = 0;
     while (true) {
