@@ -768,15 +768,36 @@ test("a photo's caption is the customer's question -- it reaches the model as th
   assert.deepEqual(llmProvider.requests[0].attachments, [{ mimeType: "image/jpeg", dataBase64: "bytes-of-photo-abc" }]);
 });
 
-test("an uncaptioned attachment still gets a turn the model can answer, described rather than left blank", async () => {
+test("an uncaptioned attachment reaches the model as the file alone, with no text to compete with it", async () => {
   const { handleMessages, llmProvider } = setup(["Это наш миндаль, 150.000 сум за кг."]);
 
   await handleMessages("telegram:52", [
     attachmentMessage("telegram:52", "52:m1", { mediaType: "photo", mediaFileId: "photo-xyz", mediaMimeType: "image/jpeg" }),
   ]);
 
-  assert.match(llmProvider.requests[0].newUserMessage, /фото/, "the placeholder must name what was actually sent");
+  // This started as the opposite assertion -- that a Russian description was
+  // sent as the turn's text. In production that description was the only text
+  // in the request, so a customer who spoke Uzbek got an Uzbek greeting
+  // followed by a Russian price list: the model averaged the language it
+  // heard with the language it read. The file has to arrive alone.
+  assert.equal(llmProvider.requests[0].newUserMessage, "");
   assert.equal(llmProvider.requests[0].attachments?.length, 1);
+});
+
+test("the manager still gets a readable description of an uncaptioned voice message, even though the model got none", async () => {
+  const { handleMessages, transport } = setup(["Передаю менеджеру.\n\n[ESCALATE]"]);
+
+  await handleMessages("telegram:58", [
+    attachmentMessage("telegram:58", "58:m1", { mediaType: "voice", mediaFileId: "voice-1", mediaMimeType: "audio/ogg" }),
+  ]);
+
+  const managerCall = transport.calls.find((c) => c.method === "sendMessage" && c.chatId === 999999999);
+  assert.ok(managerCall && managerCall.method === "sendMessage");
+  assert.match(
+    managerCall.text,
+    /голосовое сообщение/,
+    "staff read this one, so it stays Russian -- only the model is kept away from it"
+  );
 });
 
 test("a file that can't be read escalates to a manager and forwards the original, rather than asking the customer to retype it", async () => {

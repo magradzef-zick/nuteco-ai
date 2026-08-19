@@ -309,3 +309,44 @@ test("history turns never carry attachments back, so a long conversation can't g
   assert.deepEqual(body.contents[1].parts, [{ text: "Это наш миндаль." }]);
   assert.equal(body.contents[2].parts.length, 2, "only the new turn carries the file");
 });
+
+test("a voice message with no caption is sent as the audio alone, with no empty text part beside it", async () => {
+  const { fetchImpl, requests } = fakeFetch([okGenerateResponse("Ha, bor.")]);
+  const provider = new GeminiProvider({
+    apiKey: "key",
+    model: "gemini-3.5-flash",
+    fetchImpl,
+    sleep: async () => {},
+    logger: fakeLogger().logger,
+  });
+
+  await provider.generateReply({
+    systemPrompt: "prompt",
+    historyTurns: [],
+    newUserMessage: "",
+    attachments: [{ mimeType: "audio/ogg", dataBase64: "T2dnUw==" }],
+  });
+
+  const body = requests[0].body as { contents: Array<{ role: string; parts: unknown[] }> };
+  assert.deepEqual(
+    body.contents[0].parts,
+    [{ inline_data: { mime_type: "audio/ogg", data: "T2dnUw==" } }],
+    "any text here competes with the language the model hears in the audio"
+  );
+});
+
+test("a text-only turn still sends a text part even when the text is empty, so the request is never partless", async () => {
+  const { fetchImpl, requests } = fakeFetch([okGenerateResponse("...")]);
+  const provider = new GeminiProvider({
+    apiKey: "key",
+    model: "gemini-3.5-flash",
+    fetchImpl,
+    sleep: async () => {},
+    logger: fakeLogger().logger,
+  });
+
+  await provider.generateReply({ systemPrompt: "prompt", historyTurns: [], newUserMessage: "" });
+
+  const body = requests[0].body as { contents: Array<{ role: string; parts: unknown[] }> };
+  assert.deepEqual(body.contents[0].parts, [{ text: "" }]);
+});

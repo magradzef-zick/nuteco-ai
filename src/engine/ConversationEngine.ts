@@ -190,7 +190,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       .map((payload) => payload.text)
       .filter((text): text is string => text !== null && text.trim().length > 0)
       .join("\n");
-    const language = detectLanguage(rawText);
+    let language = detectLanguage(rawText);
     // Every message in this batch is from the same customer, so any one
     // of them carries the same sender identity -- the first is as good as
     // any other.
@@ -266,12 +266,21 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
       return;
     }
 
-    // A voice message or an uncaptioned photo has no text of its own, but
-    // the model still needs a turn to answer -- the file goes in as an
-    // attachment and this stands in for the words the customer didn't
-    // type. It is also what the manager sees in an escalation and what
-    // history keeps, both of which read correctly as a description.
+    // A voice message or an uncaptioned photo has no text of its own, so
+    // the manager notification and the stored history need something that
+    // says what arrived. That description is deliberately Russian: it is
+    // read by staff, not by the customer.
     const combinedUserMessage = hasText ? rawText : describeAttachments(rawPayloads);
+
+    // What the *model* is told, which is pointedly not that description.
+    // Sending it produced a real failure: on a voice message it is the only
+    // text in the whole request, so a customer speaking Uzbek got a Uzbek
+    // greeting followed by a Russian price list -- the model split the
+    // difference between the language it heard and the language it read.
+    // With no text at all, the audio is the only language signal there is,
+    // which is exactly what the prompt's "answer in the language they
+    // spoke" rule needs in order to mean anything.
+    const modelUserMessage = hasText ? rawText : "";
 
     let state: Awaited<ReturnType<ConversationStateRepository["get"]>>;
     try {
@@ -396,7 +405,7 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
         reply = await deps.llmProvider.generateReply({
           systemPrompt,
           historyTurns: history,
-          newUserMessage: combinedUserMessage,
+          newUserMessage: modelUserMessage,
           ...(attachments.length > 0 ? { attachments } : {}),
         });
       } catch (error) {
@@ -407,6 +416,16 @@ export function createConversationEngine(deps: ConversationEngineDependencies) {
           reason: "llm_unavailable",
           error: (error as Error).message,
         });
+      }
+
+      // A voice message carries no text, so detectLanguage above had nothing
+      // to read and returned its Russian default -- which is how a customer
+      // speaking Uzbek was sent a Russian "I can't say for sure". The model
+      // answers in the customer's language by definition, so once it has
+      // produced a reply, that reply is the best available evidence of which
+      // language any fallback replacing it should be written in.
+      if (!hasText && reply !== null) {
+        language = detectLanguage(reply.text);
       }
 
       if (reply === null) {

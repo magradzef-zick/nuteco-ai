@@ -159,7 +159,16 @@ export class GeminiProvider implements LlmProvider {
             ...(request.attachments ?? []).map((attachment) => ({
               inline_data: { mime_type: attachment.mimeType, data: attachment.dataBase64 },
             })),
-            { text: request.newUserMessage },
+            // An empty text part is omitted rather than sent as "". A voice
+            // message carries its language in the audio alone, and any text
+            // sitting beside it competes with what the model hears -- an
+            // Uzbek question answered in Russian, in production, because a
+            // Russian placeholder was the only text in the request. The
+            // guard on `attachments` keeps a text-only turn from producing
+            // a request with no parts at all.
+            ...(request.newUserMessage.length > 0 || (request.attachments ?? []).length === 0
+              ? [{ text: request.newUserMessage }]
+              : []),
           ],
         },
       ],

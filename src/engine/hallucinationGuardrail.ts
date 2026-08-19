@@ -175,8 +175,35 @@ function allIndicesOf(text: string, needle: string): number[] {
   return indices;
 }
 
-/** Every legitimate spelling of an amount, so a reformatted price ("25 000" for "25.000") is still checked. */
+/**
+ * Units that name the same thing in the two scripts this business writes
+ * in. The knowledge base is Russian throughout ("1 кг", "200 гр"), while a
+ * correct Uzbek reply writes the identical size in Latin ("1 kg", "200
+ * gr") -- and a literal search for one never finds the other. That single
+ * mismatch blocked essentially every Uzbek reply that named a size, prices
+ * included: the size failed verification, the whole reply was withheld as
+ * unsafe, and the customer got "I can't say for sure" instead of the price
+ * that was sitting right there in the knowledge base.
+ */
+const EQUIVALENT_UNITS: string[][] = [
+  ["кг", "kg"],
+  ["гр", "г", "gr", "g"],
+  ["шт", "dona", "pcs", "pc"],
+  ["л", "litr", "l"],
+  ["месяц", "месяца", "месяцев", "oy", "oylik", "month", "months"],
+];
+
+/** Every legitimate spelling of an amount, so a reformatted price ("25 000" for "25.000") or a size written in the other script ("1 kg" for "1 кг") is still checked. */
 function writtenVariantsOf(claim: string): string[] {
+  // A number carrying a unit is matched by its unit's equivalents rather
+  // than by digit regrouping -- "1 kg" and "1 кг" are the same claim.
+  const unitClaim = /^(\d+(?:[.,]\d+)?)\s?(\p{L}+)$/u.exec(claim);
+  if (unitClaim) {
+    const [, amount, unit] = unitClaim;
+    const spellings = EQUIVALENT_UNITS.find((units) => units.includes(unit.toLowerCase())) ?? [unit.toLowerCase()];
+    return [...new Set([claim, ...spellings.flatMap((spelling) => [`${amount} ${spelling}`, `${amount}${spelling}`])])];
+  }
+
   const digits = claim.replace(/\D/g, "");
   if (digits.length < 4 || !/^[\d.,\s ]+$/.test(claim)) {
     return [claim];

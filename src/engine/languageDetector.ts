@@ -64,6 +64,17 @@ const UZBEK_LATIN_STEMS = [
   "bodom",
   "aka",
   "opa",
+  // Words this business's own Uzbek replies are full of, none of which
+  // appeared in a list built from customer greetings. Without them a price
+  // answer ("Pista pastasi 1 kg -- 450.000 so'm") contains no recognized
+  // Uzbek stem at all and loses to raw Latin-script dominance, which
+  // classifies it as English. Each is checked for collisions with English
+  // first -- a bare "som" would match "some" and "siz" would match "size",
+  // so neither is here.
+  "narx",
+  "uchun",
+  "bilan",
+  "so'm",
 ];
 
 /**

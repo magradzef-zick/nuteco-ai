@@ -98,3 +98,29 @@ test("catches multiple unverified numbers in one reply", () => {
   assert.equal(result.safe, false);
   assert.deepEqual(result.unverifiedNumbers, ["500.000"]);
 });
+
+/**
+ * The knowledge base is Russian throughout, so a size in it is always
+ * Cyrillic ("1 кг"). A correct Uzbek reply writes the same size in Latin
+ * ("1 kg"), and a literal lookup of one never finds the other -- which
+ * withheld essentially every Uzbek price answer as "unverified" and sent
+ * the customer "I can't say for sure" instead of a price the knowledge base
+ * plainly contained.
+ */
+test("a size written in Latin verifies against the same size written in Cyrillic", () => {
+  const knowledgeBase = "Фисташковая паста: 200 гр — 100.000, 1 кг — 450.000.";
+
+  const uzbek = checkForUnverifiedNumbers("Pista pastasi 1 kg — 450.000 so'm", knowledgeBase);
+  assert.deepEqual(uzbek.unverifiedNumbers, []);
+  assert.equal(uzbek.safe, true);
+
+  const grams = checkForUnverifiedNumbers("200 gr — 100.000 so'm", knowledgeBase);
+  assert.equal(grams.safe, true, "\"200 gr\" is the same claim as \"200 гр\"");
+});
+
+test("matching units across scripts does not wave through a size the knowledge base never states", () => {
+  const knowledgeBase = "Фисташковая паста: 200 гр — 100.000, 1 кг — 450.000.";
+
+  const invented = checkForUnverifiedNumbers("Pista pastasi 5 kg — 450.000 so'm", knowledgeBase);
+  assert.equal(invented.safe, false, "there is no 5 кг size -- transliteration must not become a blanket pass");
+});

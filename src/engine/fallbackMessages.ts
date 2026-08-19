@@ -56,10 +56,19 @@ export const FALLBACK_MESSAGES: FallbackMessageSet = {
   },
   // A deterministic B2B/wholesale signal matched -- always escalates,
   // regardless of what the assistant could technically answer.
+  //
+  // These three used to end in "сейчас подключу" / "hoziroq ulanaman" /
+  // "connecting you now". Nobody was being connected to anything: this path
+  // only ever runs outside working hours (see composition.ts -- staff answer
+  // Telegram themselves during them and the engine isn't invoked at all), so
+  // the promise was false in every language at once, and it contradicted the
+  // handoff line the system prompt gives the model for the same situation.
+  // The wording below is that same line verbatim, so the deterministic path
+  // and the model path now tell a customer the same thing.
   b2bEscalation: {
-    ru: "Опт и корпоративные — это к менеджеру, сейчас подключу 😊",
-    uz: "Optom va korporativ buyurtmalar menejerga — hoziroq ulanaman.",
-    en: "Wholesale and business orders go straight to our team — connecting you now.",
+    ru: "Опт и корпоративные — это к менеджеру. Менеджер свяжется с вами в рабочее время.",
+    uz: "Optom va korporativ buyurtmalar menejerga. Menejer siz bilan ish vaqtida bog'lanadi.",
+    en: "Wholesale and business orders go to our team. The manager will contact you during the next working period.",
   },
   // Shared by every purely-technical failure the customer can't do
   // anything about (the LLM is unreachable, a reply came back truncated,
