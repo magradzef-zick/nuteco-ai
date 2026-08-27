@@ -19,7 +19,8 @@
 | Chia seeds (семена чиа) | Sourced from Paraguay per staff description | |
 | Psyllium (псиллиум) | — | Vegan egg substitute, gel-forming fiber |
 | Coconut flour (кокосовая мука) | — | Availability has fluctuated (was in stock, went out, restocked) — verify current status before stating availability |
-| Crushed nuts (миндаль / фундук / фисташка / арахис дроблёные) | — | Processed ingredient lines, sold by weight — not the same thing as whole raw nuts (see below) |
+| Crushed nuts (миндаль / фундук / фисташка / арахис дроблёные) | — | Processed ingredient lines, sold by weight — a separate price-list line from whole shelled nuts |
+| Whole shelled nuts (арахис, грецкий орех, миндаль, кешью, фундук, фисташка — «Орехи отборные») | Almond has a blanched and an unblanched line | Confirmed by the client 27.08.2026 that Nuteco does sell these — see `prices.md` |
 | Soy lecithin (соевый лецитин, E322) | — | Sourced from China; used in chocolate (0.5–1.2%) and confectionery/bakery (0.8–3.0%) as a viscosity reducer. Not in the price list — any price question goes to a manager |
 
 ## Future / in-development products
@@ -28,7 +29,6 @@ See [`future_products.md`](future_products.md) for marzipan and praline status �
 
 ## Products Nuteco does NOT sell
 
-- Whole/raw nuts of any kind — confirmed repeatedly and consistently ("we're not a shop, we're a production workshop"). This is a hard, safe "no" the assistant can state with confidence. Crushed nuts and almond flakes are a different thing entirely: they are processed ingredient lines, they are in the price list, and they are sold — don't refuse them under the whole-nuts rule.
 - Finished desserts (e.g. "творожная пасха") — Nuteco supplies ingredients that confectioners use to make such things, not the finished product itself.
 - Kataifi dough — not produced; historically the manager redirected one customer to a named competitor retailer. `[NEEDS CLIENT CONFIRMATION before the assistant repeats a competitor redirect.]`
 
