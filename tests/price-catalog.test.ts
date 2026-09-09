@@ -25,9 +25,9 @@ test("the real price list parses into a catalogue", () => {
 
   const pistachioPaste = CATALOG.entries.find((entry) => entry.product === "Фисташковая паста");
   assert.ok(pistachioPaste, "Фисташковая паста missing from the parsed catalogue");
-  assert.equal(pistachioPaste.pricesBySize.get(200), "100000");
-  assert.equal(pistachioPaste.pricesBySize.get(500), "230000");
-  assert.equal(pistachioPaste.pricesBySize.get(1000), "450000");
+  assert.equal(pistachioPaste.pricesBySize.get(200), "110000");
+  assert.equal(pistachioPaste.pricesBySize.get(500), "250000");
+  assert.equal(pistachioPaste.pricesBySize.get(1000), "490000");
 });
 
 test("a size the price list marks with a dash is absent, not zero", () => {
@@ -35,17 +35,18 @@ test("a size the price list marks with a dash is absent, not zero", () => {
   assert.ok(peanutFlour);
   assert.equal(peanutFlour.pricesBySize.has(150), false);
   assert.equal(peanutFlour.pricesBySize.get(500), "35000");
+  assert.equal(peanutFlour.pricesBySize.get(1000), "60000");
 });
 
 test("the odd sizes in the price list survive parsing", () => {
   const jerrys = CATALOG.entries.find((entry) => entry.product.startsWith("Jerry's Crunchy"));
   assert.ok(jerrys);
-  assert.equal(jerrys.pricesBySize.get(300), "35000");
+  assert.equal(jerrys.pricesBySize.get(300), "40000");
 
   const flakes = CATALOG.entries.find((entry) => entry.product === "Миндальные лепестки");
   assert.ok(flakes);
-  assert.equal(flakes.pricesBySize.get(350), "75000");
-  assert.equal(flakes.pricesBySize.get(1000), "220000");
+  assert.equal(flakes.pricesBySize.get(350), "90000");
+  assert.equal(flakes.pricesBySize.get(1000), "250000");
 });
 
 test("prose tables elsewhere in the knowledge base are not read as price tables", () => {
@@ -56,8 +57,8 @@ test("prose tables elsewhere in the knowledge base are not read as price tables"
 });
 
 test("a correct price for a correct size passes", () => {
-  const reply = "Фисташковая паста 1 кг — 450.000 сум.";
-  assert.deepEqual(findMisattributedPrices(reply, ["450.000"], CATALOG), []);
+  const reply = "Фисташковая паста 1 кг — 490.000 сум.";
+  assert.deepEqual(findMisattributedPrices(reply, ["490.000"], CATALOG), []);
   assert.equal(checkForUnverifiedNumbers(reply, KB).safe, true);
 });
 
@@ -76,12 +77,12 @@ test("catches a real catalogue price attached to the wrong product", () => {
 });
 
 test("catches the right product's price quoted for the wrong size", () => {
-  // 450.000 is the 1 kg price; the 500 g jar is 230.000.
-  const reply = "Фисташковая паста 500 гр — 450.000 сум.";
+  // 490.000 is the 1 kg price; the 500 g jar is 250.000.
+  const reply = "Фисташковая паста 500 гр — 490.000 сум.";
   const result = checkForUnverifiedNumbers(reply, KB);
 
   assert.equal(result.safe, false);
-  assert.ok(result.unverifiedNumbers.includes("450.000"));
+  assert.ok(result.unverifiedNumbers.includes("490.000"));
 });
 
 test("catches a size the price list does not sell, even at a real price", () => {
@@ -100,12 +101,12 @@ test("catches an invented price written in the spreadsheet's bare format", () =>
 });
 
 test("a correct price still verifies when the model reformats the separators", () => {
-  for (const written of ["25.000", "25000", "25 000", "25 000"]) {
+  for (const written of ["30.000", "30000", "30 000", "30 000"]) {
     const reply = `Арахисовая паста с мёдом 200 гр — ${written} сум.`;
     assert.equal(
       checkForUnverifiedNumbers(reply, KB).safe,
       true,
-      `"${written}" should verify against the price list's 25.000`
+      `"${written}" should verify against the price list's 30.000`
     );
   }
 });
@@ -134,23 +135,23 @@ test("catches any price put on a product the price list deliberately leaves unpr
 });
 
 test("pistachio praline is priced and answers normally, unlike the other pralines", () => {
-  assert.equal(checkForUnverifiedNumbers("Фисташковое пралине 1 кг — 450.000.", KB).safe, true);
+  assert.equal(checkForUnverifiedNumbers("Фисташковое пралине 1 кг — 490.000.", KB).safe, true);
 });
 
 test("tells apart product variants that differ by one word", () => {
-  // 23.000 is the honey-free 200 g jar, 25.000 the one with honey. Both are
-  // real catalogue prices, so only exact product matching separates them.
+  // 35.000 is the honey-free walnut paste, 40.000 the one with honey. Both
+  // are real catalogue prices, so only exact product matching separates them.
   const truthful = [
-    "Арахисовая паста с мёдом 200 гр — 25.000.",
-    "Арахисовая паста без мёда 200 гр — 23.000.",
-    "Миндальная мука 500 гр — 80.000 сум.",
-    "Миндальная мука кето 500 гр — 70.000 сум.",
+    "Паста из грецкого ореха с мёдом 200 гр — 40.000.",
+    "Паста из грецкого ореха без мёда 200 гр — 35.000.",
+    "Миндальная мука 500 гр — 85.000 сум.",
+    "Миндальная мука кето 500 гр — 80.000 сум.",
   ];
   const swapped = [
-    "Арахисовая паста с мёдом 200 гр — 23.000.",
-    "Арахисовая паста без мёда 200 гр — 25.000.",
-    "Миндальная мука 500 гр — 70.000 сум.",
-    "Миндальная мука кето 500 гр — 80.000 сум.",
+    "Паста из грецкого ореха с мёдом 200 гр — 35.000.",
+    "Паста из грецкого ореха без мёда 200 гр — 40.000.",
+    "Миндальная мука 500 гр — 80.000 сум.",
+    "Миндальная мука кето 500 гр — 85.000 сум.",
   ];
 
   for (const reply of truthful) {
@@ -164,7 +165,7 @@ test("tells apart product variants that differ by one word", () => {
 test("a stem does not match a longer, different word", () => {
   // "Арахис дроблёный" must not be read into "арахисовая", or the crushed
   // peanut prices would vouch for the paste and flour lines.
-  assert.equal(checkForUnverifiedNumbers("Арахис дроблёный 500 гр — 25.000.", KB).safe, true);
+  assert.equal(checkForUnverifiedNumbers("Арахис дроблёный 500 гр — 35.000.", KB).safe, true);
   assert.equal(checkForUnverifiedNumbers("Арахис дроблёный 500 гр — 23.000.", KB).safe, false);
   assert.equal(checkForUnverifiedNumbers("Арахисовая мука 500 гр — 25.000.", KB).safe, false);
 });
@@ -181,8 +182,8 @@ test("prices pair to sizes by order, not by proximity, inside a one-line ladder"
 });
 
 test("reads the price-then-size wording too", () => {
-  assert.equal(checkForUnverifiedNumbers("Цена 230.000 за 500 гр, фисташковая паста.", KB).safe, true);
-  assert.equal(checkForUnverifiedNumbers("Цена 250.000 за 500 гр, фисташковая паста.", KB).safe, false);
+  assert.equal(checkForUnverifiedNumbers("Цена 250.000 за 500 гр, фисташковая паста.", KB).safe, true);
+  assert.equal(checkForUnverifiedNumbers("Цена 220.000 за 500 гр, фисташковая паста.", KB).safe, false);
 });
 
 test("catches an invented price too small for the price-shaped number patterns", () => {
@@ -204,8 +205,8 @@ test("asking which variant the customer wants is not a price claim", () => {
 });
 
 test("an order quantity is not mistaken for a packing size", () => {
-  const reply = "Миндальная мука 2 кг — 150.000 сум за кг.";
-  assert.deepEqual(findMisattributedPrices(reply, ["150.000", "2 кг"], CATALOG), []);
+  const reply = "Миндальная мука 2 кг — 165.000 сум за кг.";
+  assert.deepEqual(findMisattributedPrices(reply, ["165.000", "2 кг"], CATALOG), []);
 });
 
 test("abstains when the reply names no catalogue product", () => {
